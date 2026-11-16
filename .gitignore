@@ -1,6 +1,9 @@
 # Clave de API y ajustes locales: nunca se suben
 config.json
 
+# Modelo de IA local (se descarga a petición del usuario, ~208 MB)
+modelos/
+
 # Fotos que se dejen en la carpeta del editor
 *.jpg
 *.jpeg

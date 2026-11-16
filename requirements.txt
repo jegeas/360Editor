@@ -1,2 +1,4 @@
 numpy>=1.26
 Pillow>=10.0
+# Opcional, solo para el modo local (el editor lo instala si eliges ese modo):
+# onnxruntime>=1.17

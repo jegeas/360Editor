@@ -1,9 +1,9 @@
-"""Editor de panorámicas 360 con IA (Gemini).
+"""Editor de panorámicas 360 con IA (Gemini, OpenAI, Stability, FLUX o local).
 
 Flujo:
   1. Se elige una panorámica equirectangular y se navega por ella.
   2. La vista actual se reproyecta a una imagen plana (rectilínea) sin distorsión.
-  3. Se pinta una máscara y Gemini quita o añade elementos en esa zona.
+  3. Se pinta una máscara y la IA elegida quita o añade elementos en esa zona.
   4. El resultado se fusiona solo dentro de la máscara y se reproyecta de vuelta
      a la panorámica a resolución completa.
 
@@ -22,8 +22,6 @@ import os
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,12 +30,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 import numpy as np
 from PIL import Image, ImageFilter
 
+from providers import LOCAL, PROVIDERS
+
 Image.MAX_IMAGE_PIXELS = None
 
 HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "config.json"
-PORT = int(os.environ.get("EDITOR_PORT", "8361"))
-DEFAULT_MODEL = "gemini-3.1-flash-image"
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("EDITOR_PORT", "8361"))
+DEFAULT_PROVIDER = "gemini"
 VIEW_WIDTH = 4096          # resolución de la panorámica que ve el navegador
 MAX_UNDO = 15
 MAX_UPLOAD = 400 * 1024 * 1024
@@ -45,60 +45,67 @@ MAX_UPLOAD = 400 * 1024 * 1024
 
 # --------------------------------------------------------------------------
 # Configuración
+#   Cada persona guarda sus propias claves en config.json, que está en .gitignore
+#   y nunca viaja con el repositorio. Se piden desde la web en el primer arranque.
 # --------------------------------------------------------------------------
 
-# Cada persona guarda su propia clave en config.json, que está en .gitignore y por
-# tanto nunca viaja con el repositorio. Se pide en el primer arranque desde la web.
-
 def read_config_file():
-    cfg = {"api_key": "", "model": DEFAULT_MODEL}
+    cfg = {}
     if CONFIG_FILE.exists():
         try:
-            cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
+            cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
-            pass
-    return cfg
-
-
-def load_config():
-    """Configuración efectiva: GEMINI_API_KEY (si existe) tiene prioridad sobre el archivo."""
-    cfg = read_config_file()
-    if os.environ.get("GEMINI_API_KEY"):
-        cfg["api_key"] = os.environ["GEMINI_API_KEY"].strip()
-    return cfg
+            cfg = {}
+    keys = dict(cfg.get("keys") or {})
+    models = dict(cfg.get("models") or {})
+    # Formato antiguo (solo Gemini): {"api_key": ..., "model": ...}
+    if cfg.get("api_key") and "gemini" not in keys:
+        keys["gemini"] = cfg["api_key"]
+    if cfg.get("model") and "gemini" not in models:
+        models["gemini"] = cfg["model"]
+    provider = cfg.get("provider") if cfg.get("provider") in PROVIDERS else DEFAULT_PROVIDER
+    return {"provider": provider, "keys": {k: v for k, v in keys.items() if v}, "models": models}
 
 
 def save_config(cfg):
-    # Solo se escribe lo del archivo: la clave de la variable de entorno nunca se guarda.
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Solo se escriben las claves del archivo: las de variables de entorno nunca se guardan.
+    out = {"provider": cfg["provider"], "keys": cfg["keys"], "models": cfg["models"]}
+    CONFIG_FILE.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def key_info():
-    if os.environ.get("GEMINI_API_KEY"):
-        key, source = os.environ["GEMINI_API_KEY"].strip(), "env"
-    else:
-        key, source = read_config_file().get("api_key", "").strip(), "file"
-    if not key:
-        return {"hasKey": False, "keySource": None, "keyHint": None}
-    return {"hasKey": True, "keySource": source, "keyHint": "…" + key[-4:]}
+def provider_key(pid, cfg=None):
+    """(clave, origen) de un proveedor. La variable de entorno tiene prioridad."""
+    p = PROVIDERS[pid]
+    if p.env and os.environ.get(p.env, "").strip():
+        return os.environ[p.env].strip(), "env"
+    key = (cfg or read_config_file())["keys"].get(pid, "").strip()
+    return (key, "file") if key else ("", None)
 
 
-def check_key(key, model):
-    """Comprueba la clave sin gastar: consulta los datos del modelo (no genera nada)."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
-    req = urllib.request.Request(url, headers={"x-goog-api-key": key})
-    try:
-        with urllib.request.urlopen(req, timeout=20):
-            return None
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")
-        if e.code == 404:
-            return f"La clave es válida, pero el modelo «{model}» no existe o no está disponible para ella."
-        if e.code in (400, 401, 403) and ("API_KEY" in detail or "API key" in detail or e.code != 400):
-            return "Google ha rechazado la clave. Revisa que la has copiado entera desde AI Studio."
-        return gemini_error(e.code, detail)
-    except urllib.error.URLError as e:
-        return f"No se pudo conectar con Google para comprobar la clave: {e.reason}"
+def provider_model(pid, cfg=None):
+    p = PROVIDERS[pid]
+    return (cfg or read_config_file())["models"].get(pid) or p.default_model
+
+
+def provider_ready(pid, cfg=None):
+    p = PROVIDERS[pid]
+    if not p.needs_key:
+        return LOCAL.status()["ready"]
+    return bool(provider_key(pid, cfg)[0])
+
+
+def providers_state():
+    cfg = read_config_file()
+    out = []
+    for pid, p in PROVIDERS.items():
+        key, source = provider_key(pid, cfg)
+        d = p.describe()
+        d.update(model=provider_model(pid, cfg), ready=provider_ready(pid, cfg),
+                 keySource=source, keyHint=("…" + key[-4:]) if key else None)
+        if pid == "local":
+            d["local"] = LOCAL.status()
+        out.append(d)
+    return cfg["provider"], out
 
 
 # --------------------------------------------------------------------------
@@ -279,113 +286,6 @@ def color_match(result, original, alpha):
 
 
 # --------------------------------------------------------------------------
-# Gemini
-# --------------------------------------------------------------------------
-
-def to_b64(img, fmt="JPEG"):
-    buf = io.BytesIO()
-    if fmt == "JPEG":
-        img.save(buf, "JPEG", quality=93)
-    else:
-        img.save(buf, fmt)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def build_prompt(mode, text):
-    common = (
-        "You are editing one flat perspective view taken from a 360-degree photograph of a real "
-        "interior/exterior. The FIRST image is the photo. The SECOND image is a mask: the WHITE area "
-        "is the only region you may change; BLACK must stay pixel-identical. "
-        "Return the full image with exactly the same framing, size, camera position, perspective, "
-        "lens and composition. Do not crop, zoom, shift, recolor or restyle anything. "
-    )
-    if mode == "remove":
-        what = text.strip() or "the object(s)"
-        return common + (
-            f"Task: completely remove {what} inside the white area. Fill that area with what would "
-            "realistically be behind it (walls, floor, stone, wood, sky...), continuing the surrounding "
-            "textures, lines, lighting and shadows seamlessly. Remove any shadows or reflections the "
-            "object casts. Do not add any new object."
-        )
-    return common + (
-        f"Task: add {text.strip()} inside the white area. It must look like it was really photographed "
-        "in this place: correct scale and perspective for this camera, matching lighting direction, "
-        "color temperature, grain, sharpness, and realistic contact shadows on the surface it rests on."
-    )
-
-
-def call_gemini(cfg, photo, mask, prompt):
-    key = cfg.get("api_key")
-    if not key:
-        raise RuntimeError("Falta tu API key de Gemini. Ponla en Ajustes.")
-    model = cfg.get("model") or DEFAULT_MODEL
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    body = {
-        "contents": [{"role": "user", "parts": [
-            {"text": prompt},
-            {"inline_data": {"mime_type": "image/jpeg", "data": to_b64(photo)}},
-            {"inline_data": {"mime_type": "image/png", "data": to_b64(mask, "PNG")}},
-        ]}],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-            "imageConfig": {"aspectRatio": "1:1", "imageSize": "2K"},
-        },
-    }
-
-    def post(payload):
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST",
-                                     headers={"Content-Type": "application/json", "x-goog-api-key": key})
-        with urllib.request.urlopen(req, timeout=240) as r:
-            return json.loads(r.read().decode("utf-8"))
-
-    try:
-        data = post(body)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")
-        if e.code == 400 and "imageConfig" in json.dumps(body) and ("image" in detail.lower() or "config" in detail.lower()):
-            # Modelos que no aceptan imageSize: reintentar sin esa opción
-            body["generationConfig"].pop("imageConfig", None)
-            try:
-                data = post(body)
-            except urllib.error.HTTPError as e2:
-                raise RuntimeError(gemini_error(e2.code, e2.read().decode("utf-8", "replace")))
-        else:
-            raise RuntimeError(gemini_error(e.code, detail))
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"No se pudo conectar con Gemini: {e.reason}")
-
-    texts = []
-    for cand in data.get("candidates", []):
-        for part in (cand.get("content") or {}).get("parts", []):
-            inline = part.get("inlineData") or part.get("inline_data")
-            if inline and inline.get("data"):
-                return Image.open(io.BytesIO(base64.b64decode(inline["data"]))).convert("RGB")
-            if part.get("text"):
-                texts.append(part["text"])
-    reason = ""
-    if data.get("candidates"):
-        reason = data["candidates"][0].get("finishReason", "")
-    if data.get("promptFeedback", {}).get("blockReason"):
-        reason = data["promptFeedback"]["blockReason"]
-    raise RuntimeError("Gemini no devolvió imagen. " + (reason + ". " if reason else "") + " ".join(texts)[:400])
-
-
-def gemini_error(code, detail):
-    try:
-        msg = json.loads(detail)["error"]["message"]
-    except Exception:
-        msg = detail[:300]
-    if code in (401, 403) or "API_KEY_INVALID" in detail or "API key not valid" in detail:
-        return "Google ha rechazado tu API key. Cámbiala en Ajustes."
-    if code == 402 or "billing" in msg.lower() or "prepayment" in msg.lower():
-        return ("Tu proyecto de Google AI Studio no tiene saldo o facturación activa para generar "
-                f"imágenes. Actívala en https://ai.studio/projects. ({msg})")
-    if code == 429:
-        return f"Has superado el límite de uso de tu API key. Espera un poco y vuelve a intentarlo. ({msg})"
-    return f"Error de Gemini ({code}): {msg}"
-
-
-# --------------------------------------------------------------------------
 # Estado de la sesión de edición (una foto abierta cada vez)
 # --------------------------------------------------------------------------
 
@@ -501,12 +401,15 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in ("/", "/index.html"):
                 return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
             if u.path == "/api/state":
-                cfg = load_config()
+                active, providers = providers_state()
                 return self.send(200, {
                     "name": S.name, "version": S.version, "undo": len(S.undo), "dirty": S.dirty,
-                    **key_info(), "model": cfg.get("model") or DEFAULT_MODEL,
+                    "provider": active, "providers": providers,
+                    "anyReady": any(p["ready"] for p in providers),
                     "size": list(S.eq.shape[1::-1]) if S.eq is not None else None,
                 })
+            if u.path == "/api/local/status":
+                return self.send(200, LOCAL.status())
             if S.eq is None and u.path.startswith("/api/"):
                 return self.send(404, {"error": "No hay ninguna foto abierta"})
             if u.path == "/api/view.jpg":
@@ -548,23 +451,48 @@ class Handler(BaseHTTPRequestHandler):
 
             b = self.body()
             if u.path == "/api/config":
+                # {target, api_key?, model?, clear_key?, activate?}
                 cfg = read_config_file()
-                model = (b.get("model") or "").strip() or cfg.get("model") or DEFAULT_MODEL
+                pid = b.get("target") or cfg["provider"]
+                if pid not in PROVIDERS:
+                    return self.send(400, {"error": "Proveedor desconocido"})
+                p = PROVIDERS[pid]
+                old_model = provider_model(pid, cfg)
+                model = (b.get("model") or "").strip() or old_model
                 new_key = (b.get("api_key") or "").strip().strip('"')
                 if b.get("clear_key"):
-                    cfg["api_key"] = ""
+                    cfg["keys"].pop(pid, None)
                 elif new_key:
-                    err = check_key(new_key, model)
+                    err = p.check_key(new_key, model)
                     if err:
                         return self.send(400, {"error": err, "field": "api_key"})
-                    cfg["api_key"] = new_key
-                elif model != cfg.get("model") and load_config().get("api_key"):
-                    err = check_key(load_config()["api_key"], model)
+                    cfg["keys"][pid] = new_key
+                elif model != old_model and provider_key(pid, cfg)[0]:
+                    err = p.check_key(provider_key(pid, cfg)[0], model)
                     if err:
                         return self.send(400, {"error": err, "field": "model"})
-                cfg["model"] = model
+                if p.default_model:
+                    cfg["models"][pid] = model
+                if b.get("activate"):
+                    if not provider_ready(pid, cfg):
+                        need = "instálalo" if not p.needs_key else "pon antes su API key"
+                        return self.send(400, {"error": f"Para usar {p.label}, {need}."})
+                    cfg["provider"] = pid
                 save_config(cfg)
-                return self.send(200, {"ok": True, **key_info()})
+                active, providers = providers_state()
+                return self.send(200, {"ok": True, "provider": active, "providers": providers})
+
+            if u.path == "/api/local/install":
+                LOCAL.install()
+                return self.send(200, LOCAL.status())
+
+            if u.path == "/api/local/remove":
+                cfg = read_config_file()
+                if cfg["provider"] == "local":
+                    cfg["provider"] = DEFAULT_PROVIDER
+                    save_config(cfg)
+                LOCAL.remove_model()
+                return self.send(200, LOCAL.status())
 
             if S.eq is None:
                 return self.send(400, {"error": "Abre una foto primero"})
@@ -579,6 +507,16 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/edit":
                 mode = b.get("mode", "remove")
                 text = b.get("prompt", "")
+                cfg = read_config_file()
+                pid = b.get("provider") or cfg["provider"]
+                if pid not in PROVIDERS:
+                    return self.send(400, {"error": "Proveedor desconocido"})
+                prov = PROVIDERS[pid]
+                if not provider_ready(pid, cfg):
+                    return self.send(400, {"error": f"{prov.label} no está configurado. Hazlo en Ajustes."})
+                if mode == "add" and not prov.can_add:
+                    return self.send(400, {"error": f"{prov.label} solo puede quitar elementos. "
+                                                    "Elige otra IA para añadir."})
                 if mode == "add" and not text.strip():
                     return self.send(400, {"error": "Describe qué quieres añadir"})
                 yaw, pitch, fov = (math.radians(float(b[k])) for k in ("yaw", "pitch", "fov"))
@@ -590,8 +528,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not np.asarray(mask).any():
                     return self.send(400, {"error": "Pinta la zona a editar"})
                 t0 = time.time()
-                ai = call_gemini(load_config(), Image.fromarray(view), mask, build_prompt(mode, text))
-                ai = np.asarray(ai.resize((n, n), Image.LANCZOS), dtype=np.float32)
+                ai = prov.edit(provider_key(pid, cfg)[0], provider_model(pid, cfg),
+                               Image.fromarray(view), mask, mode, text)
+                ai = np.asarray(ai.convert("RGB").resize((n, n), Image.LANCZOS), dtype=np.float32)
                 alpha = feather(mask, n, grow=(mode == "remove"))
                 ai = color_match(ai, view, alpha)
                 comp = view.astype(np.float32) + (ai - view.astype(np.float32)) * alpha[..., None]

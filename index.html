@@ -87,6 +87,16 @@
   dialog a { color: var(--accent); }
   .key-row { display: flex; gap: 8px; } .key-row input { flex: 1; min-width: 0; }
   button.danger { color: #f3a3a3; border-color: rgba(224,100,100,.45); }
+  dialog.wide { width: min(560px, calc(100% - 32px)); }
+  .prov-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0 4px; }
+  .prov-list button { text-align: left; padding: 9px 11px; display: flex; flex-direction: column; gap: 3px; }
+  .prov-list button.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .prov-list .chip { font-size: 11px; color: var(--muted); }
+  .prov-list .chip.ok { color: var(--ok); } .prov-list .chip.use { color: var(--accent); }
+  .prov-detail { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+  .progress { height: 8px; background: #121315; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  .progress div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  #aiSelect { width: 100%; }
   .toast { position: fixed; right: 16px; bottom: 16px; z-index: 99; max-width: 420px; }
 
   @media (max-width: 800px) {
@@ -128,10 +138,15 @@ o arrástrala aquí.</div>
       <img id="resultImg" alt="">
       <div id="cursor"></div>
     </div>
-    <div class="busy" id="aiBusy"><div><span class="spin"></span><span id="aiBusyText">Gemini está editando…</span></div></div>
+    <div class="busy" id="aiBusy"><div><span class="spin"></span><span id="aiBusyText">La IA está editando…</span></div></div>
   </div>
   <aside class="side" id="side">
     <h2>Editar vista</h2>
+    <div>
+      <label class="small" for="aiSelect">IA</label>
+      <select id="aiSelect"></select>
+      <p class="hint" id="aiNote" style="margin:6px 0 0"></p>
+    </div>
     <div class="edit-controls">
       <div class="seg" id="modeSeg">
         <button data-mode="remove" class="on">Quitar</button>
@@ -165,36 +180,46 @@ o arrástrala aquí.</div>
   </aside>
 </div>
 
-<dialog id="settings">
+<dialog id="settings" class="wide">
   <form method="dialog" id="settingsForm">
     <div id="welcome" hidden>
       <h2 style="margin-top:0;font-size:18px">Bienvenido al Editor 360</h2>
-      <p>Para quitar y añadir elementos, el editor usa la IA de Google Gemini con <b>tu propia API key</b>. Solo hay que ponerla una vez:</p>
-      <ol class="steps">
-        <li>Entra en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> con tu cuenta de Google.</li>
-        <li>Pulsa <b>Crear clave de API</b> y cópiala.</li>
-        <li>Pégala aquí abajo.</li>
-      </ol>
-      <p class="hint">Los modelos de imagen de Gemini son de pago: el proyecto de esa clave necesita facturación o saldo activos.</p>
+      <p>Para quitar y añadir elementos, el editor usa una IA. Elige cuál quieres usar.
+        Las de pago funcionan con <b>tu propia API key</b>, que solo hay que poner una vez.
+        La opción local es gratuita, pero solo sirve para quitar elementos.</p>
     </div>
-    <h2 id="settingsTitle" style="margin-top:0;font-size:16px">Ajustes</h2>
-    <label class="small" for="apiKey">Tu API key de Gemini</label>
-    <div class="key-row">
-      <input type="password" id="apiKey" placeholder="Pega aquí tu clave" autocomplete="off" spellcheck="false">
-      <button type="button" id="toggleKey" title="Mostrar u ocultar la clave">Ver</button>
+    <h2 id="settingsTitle" style="margin-top:0;font-size:16px">Ajustes de IA</h2>
+    <div class="prov-list" id="provList" role="radiogroup" aria-label="Proveedor de IA"></div>
+    <div class="prov-detail">
+      <p class="hint" id="provNote"></p>
+      <div id="keyBox">
+        <label class="small" for="apiKey" id="apiKeyLabel">Tu API key</label>
+        <div class="key-row">
+          <input type="password" id="apiKey" placeholder="Pega aquí tu clave" autocomplete="off" spellcheck="false">
+          <button type="button" id="toggleKey" title="Mostrar u ocultar la clave">Ver</button>
+        </div>
+        <p class="hint"><span id="keyState"></span> <a id="keyLink" target="_blank" rel="noopener">Conseguir una clave</a></p>
+        <div id="modelBox">
+          <label class="small" for="model">Modelo</label>
+          <input type="text" id="model" style="width:100%" list="models" spellcheck="false">
+          <datalist id="models"></datalist>
+        </div>
+        <p class="hint">Tu clave se guarda solo en este ordenador (<code>config.json</code>), nunca se sube a GitHub y solo se envía a ese proveedor.</p>
+      </div>
+      <div id="localBox">
+        <p id="localState"></p>
+        <div class="progress" id="localProgress" hidden><div id="localBar"></div></div>
+        <div class="row">
+          <button type="button" class="primary" id="localInstall">Descargar e instalar</button>
+          <button type="button" class="danger" id="localRemove">Borrar el modelo</button>
+        </div>
+      </div>
     </div>
-    <p class="hint" id="keyState"></p>
-    <label class="small" for="model">Modelo</label>
-    <input type="text" id="model" style="width:100%" list="models" spellcheck="false">
-    <datalist id="models">
-      <option value="gemini-3.1-flash-image"><option value="gemini-3-pro-image-preview"><option value="gemini-2.5-flash-image">
-    </datalist>
-    <p class="hint">Tu clave se guarda solo en este ordenador (archivo <code>config.json</code>), nunca se sube a GitHub y solo se envía a Google.</p>
     <div class="msg" id="settingsMsg"></div>
     <div class="row">
-      <button type="button" id="clearKey" class="danger" hidden>Quitar mi clave</button>
+      <button type="button" id="clearKey" class="danger">Quitar mi clave</button>
       <button value="cancel" id="cancelSettings">Cancelar</button>
-      <button class="primary" id="saveSettings" value="ok">Guardar</button>
+      <button class="primary" id="saveSettings" value="ok">Guardar y usar</button>
     </div>
   </form>
 </dialog>
@@ -252,8 +277,9 @@ async function refresh() {
   st.textContent = state.name ? (state.dirty ? 'Cambios sin guardar' : `${state.size[0]}×${state.size[1]} px`) : '';
   document.title = (state.dirty ? '• ' : '') + (state.name ? state.name + ' · ' : '') + 'Editor 360 IA';
   if (!state.name) closeViewer();
-  $('settingsBtn').classList.toggle('primary', !state.hasKey);
-  $('settingsBtn').textContent = state.hasKey ? 'Ajustes' : 'Poner API key';
+  $('settingsBtn').classList.toggle('primary', !state.anyReady);
+  $('settingsBtn').textContent = state.anyReady ? 'Ajustes' : 'Configurar IA';
+  renderAiSelect();
 }
 
 function closeViewer() {
@@ -435,55 +461,169 @@ document.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'o') { e.preventDefault(); openPhoto(); }
 });
 
-// ---------- Ajustes ----------
-// Primer arranque (sin clave): el mismo diálogo se abre en modo bienvenida.
+// ---------- Ajustes de IA ----------
+// Primer arranque (ninguna IA lista): el mismo diálogo se abre en modo bienvenida.
+let selProv = null, localPoll = null;
+const prov = (id) => state.providers.find(p => p.id === id);
+
+function provChip(p) {
+  if (p.id === state.provider && p.ready) return ['En uso', 'use'];
+  if (!p.needsKey) return p.ready ? ['Instalado', 'ok'] : [`Descarga ~${p.local.modelMB + (p.local.runtime ? 0 : p.local.runtimeMB)} MB`, ''];
+  if (p.ready) return [`Clave ${p.keyHint}`, 'ok'];
+  return ['Sin clave', ''];
+}
+
+function renderProviders() {
+  $('provList').replaceChildren(...state.providers.map(p => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', p.id === selProv);
+    b.className = p.id === selProv ? 'sel' : '';
+    const [chip, cls] = provChip(p);
+    const t = document.createElement('b'); t.textContent = p.label;
+    const c = document.createElement('span'); c.className = 'chip ' + cls; c.textContent = chip;
+    b.append(t, c);
+    b.onclick = () => { selProv = p.id; $('settingsMsg').className = 'msg'; renderProviders(); };
+    return b;
+  }));
+  const p = prov(selProv), env = p.keySource === 'env';
+  $('provNote').textContent = p.note;
+  $('keyBox').hidden = !p.needsKey;
+  $('localBox').hidden = p.needsKey;
+  $('clearKey').hidden = !(p.needsKey && p.keyHint && !env);
+  if (p.needsKey) {
+    $('apiKeyLabel').textContent = `Tu API key de ${p.label}`;
+    if ($('apiKey').dataset.for !== p.id) {
+      $('apiKey').value = ''; $('apiKey').type = 'password'; $('toggleKey').textContent = 'Ver'; $('apiKey').dataset.for = p.id;
+    }
+    $('apiKey').disabled = $('toggleKey').disabled = env;
+    $('keyState').textContent = env
+      ? `Se usa la variable de entorno ${p.env} (${p.keyHint}). Para cambiarla, cambia esa variable.`
+      : p.keyHint ? `Clave guardada: ${p.keyHint}. Para cambiarla, pega otra; si lo dejas vacío se mantiene.`
+                  : 'Todavía no hay ninguna clave para esta IA.';
+    $('keyLink').href = p.keyUrl;
+    $('keyLink').textContent = 'Conseguir una clave en ' + new URL(p.keyUrl).hostname.replace(/^www\./, '');
+    $('modelBox').hidden = !p.models.length;
+    $('model').value = p.model || '';
+    $('models').replaceChildren(...p.models.map(m => new Option(m, m)));
+  } else {
+    renderLocal(p.local);
+  }
+  $('saveSettings').textContent = p.needsKey && $('apiKey').value.trim() ? 'Comprobar y usar' : 'Usar esta IA';
+  $('saveSettings').disabled = !p.needsKey && !p.ready;
+}
+
+function renderLocal(st) {
+  const job = st.job, mb = (b) => (b / 1048576).toFixed(0);
+  const pending = (st.runtime ? 0 : st.runtimeMB) + (st.model ? 0 : st.modelMB);
+  let text;
+  if (job.running) text = job.total ? `${job.step} ${mb(job.done)} de ${mb(job.total)} MB` : job.step;
+  else if (job.error) text = 'No se pudo instalar: ' + job.error;
+  else if (st.ready) text = `Instalado. El modelo ocupa unos ${st.modelMB} MB en la carpeta «modelos» del editor.`;
+  else text = `Para usarlo hay que descargar unos ${pending} MB: ` +
+    [!st.runtime && `el motor onnxruntime (~${st.runtimeMB} MB)`, !st.model && `el modelo LaMa (~${st.modelMB} MB)`].filter(Boolean).join(' y ') +
+    '. Solo se descarga una vez; después funciona sin internet.';
+  $('localState').textContent = text;
+  $('localProgress').hidden = !job.running;
+  $('localBar').style.width = job.total ? (100 * job.done / job.total) + '%' : (job.running ? '5%' : '0');
+  $('localInstall').hidden = st.ready || job.running;
+  $('localInstall').textContent = `Descargar e instalar (~${pending} MB)`;
+  $('localRemove').hidden = !st.model || job.running;
+}
+
 function openSettings(welcome = false) {
-  const env = state?.keySource === 'env';
   $('welcome').hidden = !welcome;
   $('settingsTitle').hidden = welcome;
-  $('apiKey').value = ''; $('apiKey').type = 'password'; $('toggleKey').textContent = 'Ver';
-  $('apiKey').disabled = $('toggleKey').disabled = env;
-  $('model').value = state?.model || '';
-  $('keyState').textContent = env
-    ? `Se usa la clave de la variable de entorno GEMINI_API_KEY (${state.keyHint}). Para cambiarla, cambia esa variable.`
-    : state?.hasKey
-      ? `Clave guardada: ${state.keyHint}. Para cambiarla, pega otra; si lo dejas vacío se mantiene.`
-      : 'Todavía no hay ninguna clave.';
-  $('clearKey').hidden = !(state?.hasKey && !env);
-  $('cancelSettings').textContent = welcome ? 'Más tarde' : 'Cancelar';
-  $('saveSettings').textContent = welcome ? 'Comprobar y guardar' : 'Guardar';
+  selProv = state.provider;
+  $('apiKey').dataset.for = '';
+  $('cancelSettings').textContent = welcome ? 'Más tarde' : 'Cerrar';
   $('settingsMsg').className = 'msg';
+  renderProviders();
   $('settings').showModal();
-  if (!env) $('apiKey').focus();
+  if (prov('local').local.job.running) watchLocal();
 }
 $('settingsBtn').onclick = () => openSettings(false);
+$('settings').addEventListener('close', () => { clearInterval(localPoll); localPoll = null; });
 $('toggleKey').onclick = () => {
   const show = $('apiKey').type === 'password';
   $('apiKey').type = show ? 'text' : 'password'; $('toggleKey').textContent = show ? 'Ocultar' : 'Ver';
 };
+$('apiKey').oninput = () => {
+  $('saveSettings').textContent = $('apiKey').value.trim() ? 'Comprobar y usar' : 'Usar esta IA';
+};
 function settingsMsg(text, kind = 'err') { const m = $('settingsMsg'); m.className = 'msg ' + kind; m.textContent = text; }
 
-async function saveSettings(body, okText) {
+async function sendConfig(body, busyText) {
   const btn = $('saveSettings'), label = btn.textContent;
-  btn.disabled = true; btn.textContent = body.api_key ? 'Comprobando la clave…' : 'Guardando…';
-  try {
-    await api('/api/config', body);
-    $('settings').close(); await refresh(); toast(okText);
-  } catch (err) {
-    settingsMsg(err.message);
-    if (/clave/i.test(err.message)) $('apiKey').focus();
-  } finally { btn.disabled = false; btn.textContent = label; }
+  btn.disabled = true; btn.textContent = busyText;
+  try { const r = await api('/api/config', body); Object.assign(state, r); return true; }
+  catch (err) { settingsMsg(err.message); if (/clave|token/i.test(err.message)) $('apiKey').focus(); return false; }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
-$('saveSettings').onclick = (e) => {
+
+$('saveSettings').onclick = async (e) => {
   e.preventDefault();
-  const key = $('apiKey').value.trim();
-  if (!key && !state?.hasKey) return settingsMsg('Pega tu API key para continuar.');
-  saveSettings({ api_key: key, model: $('model').value.trim() }, key ? 'Clave comprobada y guardada' : 'Ajustes guardados');
+  const p = prov(selProv), key = $('apiKey').value.trim();
+  if (p.needsKey && !key && !p.ready) return settingsMsg(`Pega tu API key de ${p.label} para continuar.`);
+  const body = { target: p.id, activate: true };
+  if (p.needsKey) { body.api_key = key; body.model = $('model').value.trim(); }
+  if (await sendConfig(body, key ? 'Comprobando la clave…' : 'Guardando…')) {
+    $('settings').close(); await refresh(); toast(`Usando ${p.label}` + (key ? ' (clave comprobada y guardada)' : ''));
+  }
 };
-$('clearKey').onclick = () => {
-  if (!confirm('¿Quitar tu API key de este ordenador? No podrás editar con IA hasta poner otra.')) return;
-  saveSettings({ clear_key: true }, 'Clave eliminada de este ordenador');
+$('clearKey').onclick = async () => {
+  const p = prov(selProv);
+  if (!confirm(`¿Quitar tu API key de ${p.label} de este ordenador?`)) return;
+  if (await sendConfig({ target: p.id, clear_key: true }, 'Quitando…')) {
+    await refresh(); renderProviders(); settingsMsg('Clave eliminada de este ordenador.', 'ok');
+  }
 };
+
+$('localInstall').onclick = async () => {
+  const st = prov('local').local, pending = (st.runtime ? 0 : st.runtimeMB) + (st.model ? 0 : st.modelMB);
+  if (!confirm(`Se descargarán unos ${pending} MB, que ocuparán ese espacio en tu disco` +
+               (st.runtime ? '' : ' (incluye instalar el paquete de Python «onnxruntime»)') + '. ¿Continuar?')) return;
+  try { const s = await api('/api/local/install', {}); prov('local').local = s; renderProviders(); watchLocal(); }
+  catch (err) { settingsMsg(err.message); }
+};
+$('localRemove').onclick = async () => {
+  if (!confirm(`¿Borrar el modelo local? Liberarás unos ${prov('local').local.modelMB} MB. Podrás volver a descargarlo cuando quieras.`)) return;
+  try { await api('/api/local/remove', {}); await refresh(); renderProviders(); settingsMsg('Modelo borrado.', 'ok'); }
+  catch (err) { settingsMsg(err.message); }
+};
+function watchLocal() {
+  clearInterval(localPoll);
+  localPoll = setInterval(async () => {
+    const st = await api('/api/local/status').catch(() => null);
+    if (!st) return;
+    prov('local').local = st; prov('local').ready = st.ready;
+    if ($('settings').open && selProv === 'local') renderProviders();
+    if (!st.job.running) {
+      clearInterval(localPoll); localPoll = null; await refresh();
+      if ($('settings').open) {
+        renderProviders();
+        if (st.ready) settingsMsg('Modo local instalado. Pulsa «Usar esta IA».', 'ok');
+      }
+    }
+  }, 1000);
+}
+
+// Selector de IA del panel de edición: solo las que están listas
+function renderAiSelect() {
+  const ready = state.providers.filter(p => p.ready), sel = $('aiSelect');
+  const cur = ready.some(p => p.id === sel.value) ? sel.value : state.provider;
+  sel.replaceChildren(...ready.map(p => new Option(p.label + (p.canAdd ? '' : ' · solo quitar'), p.id)));
+  sel.value = ready.some(p => p.id === cur) ? cur : (ready[0]?.id || '');
+  updateModeAvailability();
+}
+function currentAi() { return prov($('aiSelect').value); }
+function updateModeAvailability() {
+  const p = currentAi(), addBtn = document.querySelector('#modeSeg [data-mode="add"]');
+  $('aiNote').textContent = p ? p.note : 'No hay ninguna IA configurada. Hazlo en Ajustes.';
+  addBtn.disabled = !!p && !p.canAdd;
+  addBtn.title = addBtn.disabled ? `${p.label} solo puede quitar elementos` : '';
+  if (addBtn.disabled && mode === 'add') document.querySelector('#modeSeg [data-mode="remove"]').click();
+}
+$('aiSelect').onchange = updateModeAvailability;
 
 // ---------- Editor de vista ----------
 const mask = $('maskCanvas'), mctx = mask.getContext('2d');
@@ -611,9 +751,11 @@ async function generate() {
     $('generateBtn').textContent = 'Generar de todas formas';
     return;
   }
-  sideMsg(''); busy('aiBusy', true, mode === 'remove' ? 'Gemini está quitando el elemento…' : 'Gemini está añadiendo el elemento…');
+  const ai = currentAi();
+  if (!ai) return sideMsg('No hay ninguna IA configurada. Hazlo en Ajustes.');
+  sideMsg(''); busy('aiBusy', true, `${ai.label}: ${mode === 'remove' ? 'quitando' : 'añadiendo'}…`);
   try {
-    const r = await api('/api/edit', { ...crop, mode, prompt: $('prompt').value, mask: mask.toDataURL('image/png') });
+    const r = await api('/api/edit', { ...crop, mode, provider: ai.id, prompt: $('prompt').value, mask: mask.toDataURL('image/png') });
     setResult(r);
   } catch (e) { sideMsg(e.message); }
   finally { busy('aiBusy', false); }
@@ -639,7 +781,7 @@ $('applyBtn').onclick = async () => {
 };
 
 window.addEventListener('beforeunload', (e) => { if (state?.dirty) { e.preventDefault(); e.returnValue = ''; } });
-refresh().then(() => { if (state.name) loadViewer(false); if (!state.hasKey) openSettings(true); })
+refresh().then(() => { if (state.name) loadViewer(false); if (!state.anyReady) openSettings(true); })
   .catch(e => toast('No hay conexión con el servidor del editor: ' + e.message, 'err'));
 </script>
 </body>
