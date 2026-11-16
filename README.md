@@ -69,6 +69,7 @@ El modo local borra objetos con [LaMa](https://github.com/advimman/lama) en tu p
 - Descarga el modelo `lama_fp32.onnx` (~208 MB, licencia Apache-2.0) de [Carve/LaMa-ONNX](https://huggingface.co/Carve/LaMa-ONNX) a la carpeta `modelos/`, y comprueba su huella SHA-256 antes de usarlo. Si falta el paquete de Python `onnxruntime` (~15 MB), lo instala.
 - Puedes borrar el modelo desde **Ajustes** para liberar espacio.
 - Solo sirve para **quitar** elementos.
+- Cada borrado tarda unos segundos. Preparar el modelo en memoria se hace una vez cada vez que abres el editor, en segundo plano en cuanto eliges la IA local. Suele tardar unos segundos, pero en equipos con poca RAM libre puede llegar a un minuto.
 
 ## Uso
 

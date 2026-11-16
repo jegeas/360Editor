@@ -371,8 +371,10 @@ class LocalLama(Provider):
     note = "Gratis y sin internet tras la descarga. Solo quita elementos; no puede añadir."
 
     def __init__(self):
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()          # instalación
+        self.load_lock = threading.Lock()     # carga del modelo en memoria
         self.session = None
+        self.loading = False
         self.job = {"running": False, "step": "", "done": 0, "total": 0, "error": None}
 
     # --- instalación ---------------------------------------------------
@@ -387,6 +389,7 @@ class LocalLama(Provider):
     def status(self):
         return {"runtime": self.runtime_ok(), "model": LAMA_FILE.exists(),
                 "ready": self.runtime_ok() and LAMA_FILE.exists(),
+                "loaded": self.session is not None, "loading": self.loading,
                 "runtimeMB": RUNTIME_SIZE_MB, "modelMB": LAMA_SIZE_MB, "job": dict(self.job)}
 
     def install(self):
@@ -435,7 +438,7 @@ class LocalLama(Provider):
         part.replace(LAMA_FILE)
 
     def remove_model(self):
-        with self.lock:
+        with self.load_lock:
             self.session = None
         LAMA_FILE.unlink(missing_ok=True)
 
@@ -443,8 +446,27 @@ class LocalLama(Provider):
     def check_key(self, key, model):
         return None
 
+    # Preparar el modelo en memoria puede tardar desde unos segundos hasta más de un
+    # minuto en equipos con poca RAM libre. Se hace una sola vez por arranque y se
+    # adelanta en segundo plano (warmup) en cuanto el usuario elige la IA local.
+    def loaded(self):
+        return self.session is not None
+
+    def warmup(self):
+        if self.session is None and self.status()["ready"] and not self.loading:
+            self.loading = True
+            threading.Thread(target=self._warm, daemon=True).start()
+
+    def _warm(self):
+        try:
+            self._session()
+        except Exception:
+            pass
+        finally:
+            self.loading = False
+
     def _session(self):
-        with self.lock:
+        with self.load_lock:
             if self.session is None:
                 if not self.status()["ready"]:
                     raise ProviderError("El modo local no está instalado. Instálalo en Ajustes.")

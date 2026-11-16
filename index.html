@@ -513,7 +513,7 @@ function renderProviders() {
 }
 
 function renderLocal(st) {
-  const job = st.job, mb = (b) => (b / 1048576).toFixed(0);
+  const job = st.job, mb = (b) => (b / 1e6).toFixed(0);   // MB decimales, como el aviso
   const pending = (st.runtime ? 0 : st.runtimeMB) + (st.model ? 0 : st.modelMB);
   let text;
   if (job.running) text = job.total ? `${job.step} ${mb(job.done)} de ${mb(job.total)} MB` : job.step;
@@ -619,6 +619,7 @@ function currentAi() { return prov($('aiSelect').value); }
 function updateModeAvailability() {
   const p = currentAi(), addBtn = document.querySelector('#modeSeg [data-mode="add"]');
   $('aiNote').textContent = p ? p.note : 'No hay ninguna IA configurada. Hazlo en Ajustes.';
+  if (p && p.id === 'local') api('/api/local/warmup', {}).catch(() => {});   // adelanta la carga del modelo
   addBtn.disabled = !!p && !p.canAdd;
   addBtn.title = addBtn.disabled ? `${p.label} solo puede quitar elementos` : '';
   if (addBtn.disabled && mode === 'add') document.querySelector('#modeSeg [data-mode="remove"]').click();
@@ -753,7 +754,12 @@ async function generate() {
   }
   const ai = currentAi();
   if (!ai) return sideMsg('No hay ninguna IA configurada. Hazlo en Ajustes.');
-  sideMsg(''); busy('aiBusy', true, `${ai.label}: ${mode === 'remove' ? 'quitando' : 'añadiendo'}…`);
+  let busyText = `${ai.label}: ${mode === 'remove' ? 'quitando' : 'añadiendo'}…`;
+  if (ai.id === 'local') {
+    const st = await api('/api/local/status').catch(() => null);
+    if (st && !st.loaded) busyText = 'Preparando el modelo local y quitando… La primera vez tras abrir el editor puede tardar hasta un minuto.';
+  }
+  sideMsg(''); busy('aiBusy', true, busyText);
   try {
     const r = await api('/api/edit', { ...crop, mode, provider: ai.id, prompt: $('prompt').value, mask: mask.toDataURL('image/png') });
     setResult(r);

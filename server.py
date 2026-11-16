@@ -486,6 +486,10 @@ class Handler(BaseHTTPRequestHandler):
                 LOCAL.install()
                 return self.send(200, LOCAL.status())
 
+            if u.path == "/api/local/warmup":
+                LOCAL.warmup()
+                return self.send(200, LOCAL.status())
+
             if u.path == "/api/local/remove":
                 cfg = read_config_file()
                 if cfg["provider"] == "local":
@@ -598,6 +602,8 @@ def main():
         print(f"Ábrelo en http://localhost:{PORT} o cierra la otra ventana del editor.")
         sys.exit(1)
     print(f"Editor 360 en http://localhost:{PORT}")
+    if read_config_file()["provider"] == "local":
+        LOCAL.warmup()          # adelanta la carga del modelo local
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
