@@ -23,8 +23,7 @@ pip install -r requirements.txt
 
 ## Puesta en marcha
 
-1. Copia `config.example.json` como `config.json` y pon tu API key. También puedes ponerla después en **Ajustes** dentro del editor, o usar la variable de entorno `GEMINI_API_KEY`.
-2. Arranca el editor:
+1. Arranca el editor:
 
    ```bash
    python server.py
@@ -32,7 +31,15 @@ pip install -r requirements.txt
 
    En Windows también puedes hacer doble clic en `Abrir editor.bat`.
 
-3. Abre <http://localhost:8361>.
+2. Abre <http://localhost:8361>.
+3. La primera vez, el editor te pide **tu propia API key** de Gemini. Créala en [aistudio.google.com/apikey](https://aistudio.google.com/apikey) y pégala. El editor la comprueba con Google antes de guardarla.
+
+## Tu API key
+
+- Cada persona usa **su propia clave**. El repositorio no incluye ninguna.
+- Se guarda solo en tu ordenador, en `config.json`, que está en `.gitignore`: nunca se sube a GitHub y solo se envía a Google.
+- Puedes cambiarla o quitarla cuando quieras desde **Ajustes**, sin reiniciar el editor.
+- Si prefieres no guardarla en un archivo, define la variable de entorno `GEMINI_API_KEY`. Tiene prioridad sobre `config.json` y nunca se escribe en él.
 
 ## Uso
 
@@ -51,14 +58,14 @@ Las fotos no se suben a internet salvo el recorte que se envía a Gemini: el edi
 
 ## Configuración (`config.json`)
 
+El editor crea este archivo al guardar tus Ajustes; no hace falta tocarlo a mano.
+
 | Clave | Por defecto | Descripción |
 | --- | --- | --- |
-| `api_key` | — | API key de Gemini. `GEMINI_API_KEY` tiene prioridad. |
+| `api_key` | — | Tu API key de Gemini. `GEMINI_API_KEY` tiene prioridad. |
 | `model` | `gemini-3.1-flash-image` | Modelo de imagen de Gemini. |
 
 El puerto se cambia con la variable de entorno `EDITOR_PORT` (por defecto `8361`).
-
-`config.json` está en `.gitignore`: tu clave no se sube al repositorio.
 
 ## Estructura
 

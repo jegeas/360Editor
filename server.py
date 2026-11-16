@@ -47,20 +47,58 @@ MAX_UPLOAD = 400 * 1024 * 1024
 # Configuración
 # --------------------------------------------------------------------------
 
-def load_config():
+# Cada persona guarda su propia clave en config.json, que está en .gitignore y por
+# tanto nunca viaja con el repositorio. Se pide en el primer arranque desde la web.
+
+def read_config_file():
     cfg = {"api_key": "", "model": DEFAULT_MODEL}
     if CONFIG_FILE.exists():
         try:
             cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
         except Exception:
             pass
+    return cfg
+
+
+def load_config():
+    """Configuración efectiva: GEMINI_API_KEY (si existe) tiene prioridad sobre el archivo."""
+    cfg = read_config_file()
     if os.environ.get("GEMINI_API_KEY"):
-        cfg["api_key"] = os.environ["GEMINI_API_KEY"]
+        cfg["api_key"] = os.environ["GEMINI_API_KEY"].strip()
     return cfg
 
 
 def save_config(cfg):
+    # Solo se escribe lo del archivo: la clave de la variable de entorno nunca se guarda.
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def key_info():
+    if os.environ.get("GEMINI_API_KEY"):
+        key, source = os.environ["GEMINI_API_KEY"].strip(), "env"
+    else:
+        key, source = read_config_file().get("api_key", "").strip(), "file"
+    if not key:
+        return {"hasKey": False, "keySource": None, "keyHint": None}
+    return {"hasKey": True, "keySource": source, "keyHint": "…" + key[-4:]}
+
+
+def check_key(key, model):
+    """Comprueba la clave sin gastar: consulta los datos del modelo (no genera nada)."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+    req = urllib.request.Request(url, headers={"x-goog-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=20):
+            return None
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")
+        if e.code == 404:
+            return f"La clave es válida, pero el modelo «{model}» no existe o no está disponible para ella."
+        if e.code in (400, 401, 403) and ("API_KEY" in detail or "API key" in detail or e.code != 400):
+            return "Google ha rechazado la clave. Revisa que la has copiado entera desde AI Studio."
+        return gemini_error(e.code, detail)
+    except urllib.error.URLError as e:
+        return f"No se pudo conectar con Google para comprobar la clave: {e.reason}"
 
 
 # --------------------------------------------------------------------------
@@ -279,7 +317,7 @@ def build_prompt(mode, text):
 def call_gemini(cfg, photo, mask, prompt):
     key = cfg.get("api_key")
     if not key:
-        raise RuntimeError("Falta la API key de Gemini. Ponla en Ajustes.")
+        raise RuntimeError("Falta tu API key de Gemini. Ponla en Ajustes.")
     model = cfg.get("model") or DEFAULT_MODEL
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
@@ -337,6 +375,13 @@ def gemini_error(code, detail):
         msg = json.loads(detail)["error"]["message"]
     except Exception:
         msg = detail[:300]
+    if code in (401, 403) or "API_KEY_INVALID" in detail or "API key not valid" in detail:
+        return "Google ha rechazado tu API key. Cámbiala en Ajustes."
+    if code == 402 or "billing" in msg.lower() or "prepayment" in msg.lower():
+        return ("Tu proyecto de Google AI Studio no tiene saldo o facturación activa para generar "
+                f"imágenes. Actívala en https://ai.studio/projects. ({msg})")
+    if code == 429:
+        return f"Has superado el límite de uso de tu API key. Espera un poco y vuelve a intentarlo. ({msg})"
     return f"Error de Gemini ({code}): {msg}"
 
 
@@ -459,7 +504,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = load_config()
                 return self.send(200, {
                     "name": S.name, "version": S.version, "undo": len(S.undo), "dirty": S.dirty,
-                    "hasKey": bool(cfg.get("api_key")), "model": cfg.get("model") or DEFAULT_MODEL,
+                    **key_info(), "model": cfg.get("model") or DEFAULT_MODEL,
                     "size": list(S.eq.shape[1::-1]) if S.eq is not None else None,
                 })
             if S.eq is None and u.path.startswith("/api/"):
@@ -503,13 +548,23 @@ class Handler(BaseHTTPRequestHandler):
 
             b = self.body()
             if u.path == "/api/config":
-                cfg = load_config()
-                if b.get("api_key"):
-                    cfg["api_key"] = b["api_key"].strip()
-                if b.get("model"):
-                    cfg["model"] = b["model"].strip()
+                cfg = read_config_file()
+                model = (b.get("model") or "").strip() or cfg.get("model") or DEFAULT_MODEL
+                new_key = (b.get("api_key") or "").strip().strip('"')
+                if b.get("clear_key"):
+                    cfg["api_key"] = ""
+                elif new_key:
+                    err = check_key(new_key, model)
+                    if err:
+                        return self.send(400, {"error": err, "field": "api_key"})
+                    cfg["api_key"] = new_key
+                elif model != cfg.get("model") and load_config().get("api_key"):
+                    err = check_key(load_config()["api_key"], model)
+                    if err:
+                        return self.send(400, {"error": err, "field": "model"})
+                cfg["model"] = model
                 save_config(cfg)
-                return self.send(200, {"ok": True})
+                return self.send(200, {"ok": True, **key_info()})
 
             if S.eq is None:
                 return self.send(400, {"error": "Abre una foto primero"})

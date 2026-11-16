@@ -83,6 +83,10 @@
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px; width: min(440px, calc(100% - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.6); }
   dialog .row { margin-top: 10px; }
+  .steps { padding-left: 20px; margin: 8px 0; } .steps li { margin: 4px 0; }
+  dialog a { color: var(--accent); }
+  .key-row { display: flex; gap: 8px; } .key-row input { flex: 1; min-width: 0; }
+  button.danger { color: #f3a3a3; border-color: rgba(224,100,100,.45); }
   .toast { position: fixed; right: 16px; bottom: 16px; z-index: 99; max-width: 420px; }
 
   @media (max-width: 800px) {
@@ -162,18 +166,34 @@ o arrástrala aquí.</div>
 </div>
 
 <dialog id="settings">
-  <form method="dialog">
-    <h2 style="margin-top:0;font-size:16px">Ajustes</h2>
-    <label class="small" for="apiKey">API key de Google AI Studio</label>
-    <input type="password" id="apiKey" style="width:100%" placeholder="Se guarda en config.json (no se sube a GitHub)" autocomplete="off">
+  <form method="dialog" id="settingsForm">
+    <div id="welcome" hidden>
+      <h2 style="margin-top:0;font-size:18px">Bienvenido al Editor 360</h2>
+      <p>Para quitar y añadir elementos, el editor usa la IA de Google Gemini con <b>tu propia API key</b>. Solo hay que ponerla una vez:</p>
+      <ol class="steps">
+        <li>Entra en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> con tu cuenta de Google.</li>
+        <li>Pulsa <b>Crear clave de API</b> y cópiala.</li>
+        <li>Pégala aquí abajo.</li>
+      </ol>
+      <p class="hint">Los modelos de imagen de Gemini son de pago: el proyecto de esa clave necesita facturación o saldo activos.</p>
+    </div>
+    <h2 id="settingsTitle" style="margin-top:0;font-size:16px">Ajustes</h2>
+    <label class="small" for="apiKey">Tu API key de Gemini</label>
+    <div class="key-row">
+      <input type="password" id="apiKey" placeholder="Pega aquí tu clave" autocomplete="off" spellcheck="false">
+      <button type="button" id="toggleKey" title="Mostrar u ocultar la clave">Ver</button>
+    </div>
     <p class="hint" id="keyState"></p>
     <label class="small" for="model">Modelo</label>
-    <input type="text" id="model" style="width:100%" list="models">
+    <input type="text" id="model" style="width:100%" list="models" spellcheck="false">
     <datalist id="models">
       <option value="gemini-3.1-flash-image"><option value="gemini-3-pro-image-preview"><option value="gemini-2.5-flash-image">
     </datalist>
+    <p class="hint">Tu clave se guarda solo en este ordenador (archivo <code>config.json</code>), nunca se sube a GitHub y solo se envía a Google.</p>
+    <div class="msg" id="settingsMsg"></div>
     <div class="row">
-      <button value="cancel">Cancelar</button>
+      <button type="button" id="clearKey" class="danger" hidden>Quitar mi clave</button>
+      <button value="cancel" id="cancelSettings">Cancelar</button>
       <button class="primary" id="saveSettings" value="ok">Guardar</button>
     </div>
   </form>
@@ -232,7 +252,8 @@ async function refresh() {
   st.textContent = state.name ? (state.dirty ? 'Cambios sin guardar' : `${state.size[0]}×${state.size[1]} px`) : '';
   document.title = (state.dirty ? '• ' : '') + (state.name ? state.name + ' · ' : '') + 'Editor 360 IA';
   if (!state.name) closeViewer();
-  if (!state.hasKey) toast('Configura tu API key de Gemini en Ajustes.', 'err');
+  $('settingsBtn').classList.toggle('primary', !state.hasKey);
+  $('settingsBtn').textContent = state.hasKey ? 'Ajustes' : 'Poner API key';
 }
 
 function closeViewer() {
@@ -415,17 +436,53 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- Ajustes ----------
-$('settingsBtn').onclick = () => {
-  $('apiKey').value = ''; $('model').value = state?.model || '';
-  $('keyState').textContent = state?.hasKey ? 'Hay una clave guardada. Déjalo vacío para mantenerla.' : 'Todavía no hay clave. Consíguela en aistudio.google.com.';
+// Primer arranque (sin clave): el mismo diálogo se abre en modo bienvenida.
+function openSettings(welcome = false) {
+  const env = state?.keySource === 'env';
+  $('welcome').hidden = !welcome;
+  $('settingsTitle').hidden = welcome;
+  $('apiKey').value = ''; $('apiKey').type = 'password'; $('toggleKey').textContent = 'Ver';
+  $('apiKey').disabled = $('toggleKey').disabled = env;
+  $('model').value = state?.model || '';
+  $('keyState').textContent = env
+    ? `Se usa la clave de la variable de entorno GEMINI_API_KEY (${state.keyHint}). Para cambiarla, cambia esa variable.`
+    : state?.hasKey
+      ? `Clave guardada: ${state.keyHint}. Para cambiarla, pega otra; si lo dejas vacío se mantiene.`
+      : 'Todavía no hay ninguna clave.';
+  $('clearKey').hidden = !(state?.hasKey && !env);
+  $('cancelSettings').textContent = welcome ? 'Más tarde' : 'Cancelar';
+  $('saveSettings').textContent = welcome ? 'Comprobar y guardar' : 'Guardar';
+  $('settingsMsg').className = 'msg';
   $('settings').showModal();
+  if (!env) $('apiKey').focus();
+}
+$('settingsBtn').onclick = () => openSettings(false);
+$('toggleKey').onclick = () => {
+  const show = $('apiKey').type === 'password';
+  $('apiKey').type = show ? 'text' : 'password'; $('toggleKey').textContent = show ? 'Ocultar' : 'Ver';
 };
-$('saveSettings').onclick = async (e) => {
-  e.preventDefault();
+function settingsMsg(text, kind = 'err') { const m = $('settingsMsg'); m.className = 'msg ' + kind; m.textContent = text; }
+
+async function saveSettings(body, okText) {
+  const btn = $('saveSettings'), label = btn.textContent;
+  btn.disabled = true; btn.textContent = body.api_key ? 'Comprobando la clave…' : 'Guardando…';
   try {
-    await api('/api/config', { api_key: $('apiKey').value, model: $('model').value });
-    $('settings').close(); await refresh(); toast('Ajustes guardados');
-  } catch (err) { toast(err.message, 'err'); }
+    await api('/api/config', body);
+    $('settings').close(); await refresh(); toast(okText);
+  } catch (err) {
+    settingsMsg(err.message);
+    if (/clave/i.test(err.message)) $('apiKey').focus();
+  } finally { btn.disabled = false; btn.textContent = label; }
+}
+$('saveSettings').onclick = (e) => {
+  e.preventDefault();
+  const key = $('apiKey').value.trim();
+  if (!key && !state?.hasKey) return settingsMsg('Pega tu API key para continuar.');
+  saveSettings({ api_key: key, model: $('model').value.trim() }, key ? 'Clave comprobada y guardada' : 'Ajustes guardados');
+};
+$('clearKey').onclick = () => {
+  if (!confirm('¿Quitar tu API key de este ordenador? No podrás editar con IA hasta poner otra.')) return;
+  saveSettings({ clear_key: true }, 'Clave eliminada de este ordenador');
 };
 
 // ---------- Editor de vista ----------
@@ -582,7 +639,7 @@ $('applyBtn').onclick = async () => {
 };
 
 window.addEventListener('beforeunload', (e) => { if (state?.dirty) { e.preventDefault(); e.returnValue = ''; } });
-refresh().then(() => { if (state.name) loadViewer(false); })
+refresh().then(() => { if (state.name) loadViewer(false); if (!state.hasKey) openSettings(true); })
   .catch(e => toast('No hay conexión con el servidor del editor: ' + e.message, 'err'));
 </script>
 </body>
