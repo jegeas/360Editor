@@ -1,9 +1,10 @@
 # Clave de API y ajustes locales: nunca se suben
 config.json
 
-# Panorámicas y copias editadas (pesan mucho y son privadas)
-fotos/*
-!fotos/.gitkeep
+# Fotos que se dejen en la carpeta del editor
+*.jpg
+*.jpeg
+*.png
 
 __pycache__/
 *.pyc

@@ -9,8 +9,9 @@ Flujo:
 
 Arranque:  python server.py   ->  http://localhost:8361
 
-Las panorámicas se leen de la carpeta configurada (por defecto ./fotos) y las
-copias editadas se guardan en su subcarpeta "editadas".
+El navegador abre la foto del ordenador del usuario y la sube a este servidor
+local; al guardar, el navegador escribe la panorámica editada donde el usuario
+elija (sobrescribiendo el archivo o con otro nombre).
 """
 
 import base64
@@ -26,7 +27,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -37,11 +38,9 @@ HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "config.json"
 PORT = int(os.environ.get("EDITOR_PORT", "8361"))
 DEFAULT_MODEL = "gemini-3.1-flash-image"
-DEFAULT_PHOTOS = "fotos"
-OUTPUT_SUBDIR = "editadas"
-IMAGE_EXT = (".jpg", ".jpeg", ".png")
 VIEW_WIDTH = 4096          # resolución de la panorámica que ve el navegador
 MAX_UNDO = 15
+MAX_UPLOAD = 400 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------
@@ -49,7 +48,7 @@ MAX_UNDO = 15
 # --------------------------------------------------------------------------
 
 def load_config():
-    cfg = {"api_key": "", "model": DEFAULT_MODEL, "photos_dir": DEFAULT_PHOTOS}
+    cfg = {"api_key": "", "model": DEFAULT_MODEL}
     if CONFIG_FILE.exists():
         try:
             cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
@@ -62,18 +61,6 @@ def load_config():
 
 def save_config(cfg):
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def resolve_dir(value):
-    p = Path(os.path.expandvars(os.path.expanduser(str(value or DEFAULT_PHOTOS).strip().strip('"'))))
-    return (p if p.is_absolute() else HERE / p).resolve()
-
-
-def photos_dir():
-    d = resolve_dir(load_config().get("photos_dir"))
-    if d == (HERE / DEFAULT_PHOTOS).resolve():
-        d.mkdir(exist_ok=True)
-    return d
 
 
 # --------------------------------------------------------------------------
@@ -354,44 +341,60 @@ def gemini_error(code, detail):
 
 
 # --------------------------------------------------------------------------
-# Estado de la sesión de edición
+# Estado de la sesión de edición (una foto abierta cada vez)
 # --------------------------------------------------------------------------
 
 class Session:
     def __init__(self):
         self.lock = threading.RLock()
-        self.base = None        # carpeta de fotos en uso
-        self.source = None      # ruta relativa a self.base
+        self.name = None        # nombre del archivo abierto
         self.eq = None          # np.uint8 HxWx3, versión de trabajo
+        self.meta = {}          # exif / icc_profile / xmp del original (GPano, cámara...)
         self.undo = []
         self.version = 0
+        self.saved_version = 0
         self.view_cache = None
         self.results = {}       # id -> dict(view, alpha, yaw, pitch, fov)
-        self.dirty = False
 
-    def open(self, rel):
+    @property
+    def dirty(self):
+        return self.eq is not None and self.version != self.saved_version
+
+    def load(self, name, data):
+        img = Image.open(io.BytesIO(data))
+        meta = {k: img.info[k] for k in ("exif", "icc_profile", "xmp") if img.info.get(k)}
+        eq = np.array(img.convert("RGB"))
         with self.lock:
-            base = photos_dir()
-            if rel == self.source and base == self.base and self.eq is not None:
-                return
-            img = Image.open(base / rel).convert("RGB")
-            self.eq = np.array(img)
-            self.base = base
-            self.source = rel
+            self.name = name
+            self.eq = eq
+            self.meta = meta
             self.undo = []
             self.results = {}
             self.version += 1
+            self.saved_version = self.version
             self.view_cache = None
-            self.dirty = False
 
-    def close(self):
+    def export(self, fmt):
+        """Panorámica a resolución completa, conservando los metadatos del original."""
         with self.lock:
-            self.base = self.source = self.eq = None
-            self.undo = []
-            self.results = {}
-            self.version += 1
-            self.view_cache = None
-            self.dirty = False
+            img = Image.fromarray(self.eq)
+            meta = dict(self.meta)
+            version = self.version
+        buf = io.BytesIO()
+        if fmt == "png":
+            kw = {k: meta[k] for k in ("icc_profile", "exif") if k in meta}
+            img.save(buf, "PNG", **kw)
+            mime = "image/png"
+        else:
+            kw = {k: meta[k] for k in ("icc_profile", "exif", "xmp") if k in meta}
+            try:
+                img.save(buf, "JPEG", quality=95, subsampling=0, **kw)
+            except TypeError:       # Pillow antiguo sin soporte de xmp=
+                kw.pop("xmp", None)
+                buf = io.BytesIO()
+                img.save(buf, "JPEG", quality=95, subsampling=0, **kw)
+            mime = "image/jpeg"
+        return buf.getvalue(), mime, version
 
     def view_jpeg(self):
         with self.lock:
@@ -409,30 +412,9 @@ class Session:
 S = Session()
 
 
-def list_sources():
-    """Panorámicas de la carpeta de fotos y de su subcarpeta de copias editadas."""
-    base = photos_dir()
-    out = []
-    for d in (base, base / OUTPUT_SUBDIR):
-        if not d.is_dir():
-            continue
-        for p in sorted(d.iterdir(), key=lambda x: x.name.lower()):
-            if p.is_file() and p.suffix.lower() in IMAGE_EXT and not p.stem.endswith("-preview"):
-                out.append(p.relative_to(base).as_posix())
-    return out
-
-
 def crop_size(fov):
     native = S.eq.shape[1] * fov / (2 * math.pi)
     return int(np.clip(round(native / 64) * 64, 1024, 2048))
-
-
-def output_path(rel):
-    """Ruta (relativa a la carpeta de fotos) donde se guarda la copia editada."""
-    stem = Path(rel).stem
-    if not stem.endswith("-editada"):
-        stem += "-editada"
-    return f"{OUTPUT_SUBDIR}/{stem}.jpg"
 
 
 # --------------------------------------------------------------------------
@@ -443,7 +425,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[editor] " + (fmt % args) + "\n")
 
-    def send(self, code, body, ctype="application/json"):
+    def send(self, code, body, ctype="application/json", headers=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode("utf-8")
         elif isinstance(body, str):
@@ -452,12 +434,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
-    def body(self):
+    def raw_body(self):
         n = int(self.headers.get("Content-Length", "0"))
-        return json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+        if n > MAX_UPLOAD:
+            raise ValueError("Archivo demasiado grande")
+        return self.rfile.read(n) if n else b""
+
+    def body(self):
+        data = self.raw_body()
+        return json.loads(data.decode("utf-8")) if data else {}
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -468,17 +458,13 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/state":
                 cfg = load_config()
                 return self.send(200, {
-                    "sources": list_sources(), "source": S.source, "version": S.version,
-                    "undo": len(S.undo), "dirty": S.dirty, "hasKey": bool(cfg.get("api_key")),
-                    "model": cfg.get("model") or DEFAULT_MODEL,
-                    "photosDir": str(photos_dir()), "photosSetting": cfg.get("photos_dir") or DEFAULT_PHOTOS,
-                    "photosExists": photos_dir().is_dir(),
+                    "name": S.name, "version": S.version, "undo": len(S.undo), "dirty": S.dirty,
+                    "hasKey": bool(cfg.get("api_key")), "model": cfg.get("model") or DEFAULT_MODEL,
                     "size": list(S.eq.shape[1::-1]) if S.eq is not None else None,
-                    "output": output_path(S.source) if S.source else None,
                 })
+            if S.eq is None and u.path.startswith("/api/"):
+                return self.send(404, {"error": "No hay ninguna foto abierta"})
             if u.path == "/api/view.jpg":
-                if S.eq is None:
-                    return self.send(404, {"error": "Sin panorámica"})
                 return self.send(200, S.view_jpeg(), "image/jpeg")
             if u.path == "/api/crop":
                 yaw, pitch, fov = (math.radians(float(q[k])) for k in ("yaw", "pitch", "fov"))
@@ -489,6 +475,9 @@ class Handler(BaseHTTPRequestHandler):
                 buf = io.BytesIO()
                 Image.fromarray(view).save(buf, "JPEG", quality=92)
                 return self.send(200, buf.getvalue(), "image/jpeg")
+            if u.path == "/api/export":
+                data, mime, version = S.export("png" if q.get("fmt") == "png" else "jpeg")
+                return self.send(200, data, mime, {"X-Version": str(version)})
             return self.send(404, {"error": "No encontrado"})
         except Exception as e:
             return self.send(500, {"error": str(e)})
@@ -496,34 +485,43 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         try:
-            b = self.body()
-            if u.path == "/api/open":
-                if b.get("source") not in list_sources():
-                    return self.send(400, {"error": "Panorámica no válida"})
-                S.open(b["source"])
-                return self.send(200, {"ok": True, "version": S.version})
+            if u.path == "/api/upload":
+                name = unquote(self.headers.get("X-Filename", "") or "panoramica.jpg")
+                data = self.raw_body()
+                if not data:
+                    return self.send(400, {"error": "Archivo vacío"})
+                try:
+                    S.load(Path(name).name, data)
+                except Exception:
+                    return self.send(400, {"error": "No se pudo leer la imagen. Usa un JPG o PNG."})
+                w, h = S.eq.shape[1], S.eq.shape[0]
+                warning = None
+                if abs(w / h - 2) > 0.03:
+                    warning = (f"La foto mide {w}×{h} px y no tiene proporción 2:1. "
+                               "Puede que no sea una panorámica 360 equirectangular y se vea deformada.")
+                return self.send(200, {"ok": True, "version": S.version, "warning": warning})
 
+            b = self.body()
             if u.path == "/api/config":
                 cfg = load_config()
                 if b.get("api_key"):
                     cfg["api_key"] = b["api_key"].strip()
-                if b.get("photos_dir") is not None:
-                    new_dir = b["photos_dir"].strip().strip('"') or DEFAULT_PHOTOS
-                    if new_dir != DEFAULT_PHOTOS and not resolve_dir(new_dir).is_dir():
-                        return self.send(400, {"error": f"No existe la carpeta: {resolve_dir(new_dir)}"})
-                    if resolve_dir(new_dir) != resolve_dir(cfg.get("photos_dir")):
-                        if S.dirty and not b.get("discard"):
-                            return self.send(409, {"error": "Hay cambios sin guardar en la panorámica abierta."})
-                        S.close()
-                    cfg["photos_dir"] = new_dir
                 if b.get("model"):
                     cfg["model"] = b["model"].strip()
                 save_config(cfg)
                 return self.send(200, {"ok": True})
 
+            if S.eq is None:
+                return self.send(400, {"error": "Abre una foto primero"})
+
+            if u.path == "/api/saved":
+                with S.lock:
+                    S.saved_version = int(b.get("version", S.version))
+                    if b.get("name"):
+                        S.name = Path(b["name"]).name
+                return self.send(200, {"ok": True})
+
             if u.path == "/api/edit":
-                if S.eq is None:
-                    return self.send(400, {"error": "Abre una panorámica primero"})
                 mode = b.get("mode", "remove")
                 text = b.get("prompt", "")
                 if mode == "add" and not text.strip():
@@ -565,7 +563,6 @@ class Handler(BaseHTTPRequestHandler):
                         S.undo = S.undo[-MAX_UNDO:]
                     S.results = {}
                     S.version += 1
-                    S.dirty = True
                 return self.send(200, {"ok": True, "version": S.version})
 
             if u.path == "/api/undo":
@@ -575,19 +572,7 @@ class Handler(BaseHTTPRequestHandler):
                     rows, cols, patch = S.undo.pop()
                     S.eq[np.ix_(rows, cols)] = patch
                     S.version += 1
-                    S.dirty = bool(S.undo)
                 return self.send(200, {"ok": True, "version": S.version})
-
-            if u.path == "/api/save":
-                with S.lock:
-                    if S.eq is None:
-                        return self.send(400, {"error": "Nada que guardar"})
-                    rel = output_path(S.source)
-                    out = S.base / rel
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    Image.fromarray(S.eq).save(out, "JPEG", quality=92, subsampling=0)
-                    S.dirty = False
-                return self.send(200, {"ok": True, "saved": str(out)})
 
             return self.send(404, {"error": "No encontrado"})
         except RuntimeError as e:
@@ -598,10 +583,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(500, {"error": f"{type(e).__name__}: {e}"})
 
 
+class Server(ThreadingHTTPServer):
+    # En Windows, SO_REUSEADDR deja que varios procesos escuchen en el mismo puerto y
+    # responde el más antiguo. Se pide uso exclusivo para que un segundo arranque falle.
+    allow_reuse_address = sys.platform != "win32"
+    daemon_threads = True
+
+    def server_bind(self):
+        import socket
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def main():
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    try:
+        srv = Server(("127.0.0.1", PORT), Handler)
+    except OSError:
+        print(f"El puerto {PORT} ya está en uso: probablemente el editor ya está abierto.")
+        print(f"Ábrelo en http://localhost:{PORT} o cierra la otra ventana del editor.")
+        sys.exit(1)
     print(f"Editor 360 en http://localhost:{PORT}")
-    print(f"Carpeta de fotos: {photos_dir()}")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

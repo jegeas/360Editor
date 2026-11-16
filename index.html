@@ -28,7 +28,11 @@
   header { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
   header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: .2px; }
   header .spacer { flex: 1; }
-  #source { min-width: 220px; max-width: 340px; }
+  .file-name { font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stage.drop::after { content: "Suelta aquí la foto 360"; position: absolute; inset: 12px; display: grid; place-items: center;
+    border: 2px dashed var(--accent); border-radius: 12px; background: rgba(20,20,22,.8); font-size: 18px; z-index: 20; }
+  .save-option { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+  .save-option button { text-align: left; padding: 10px 14px; }
   .status { color: var(--muted); font-size: 13px; }
   .status.dirty { color: var(--accent); }
 
@@ -91,16 +95,19 @@
 <div class="app">
   <header>
     <h1>Editor 360 · IA</h1>
-    <select id="source"><option value="">Elige una panorámica…</option></select>
+    <button id="openBtn" title="Ctrl+O">Abrir foto…</button>
+    <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,image/jpeg,image/png" hidden>
+    <span id="fileName" class="file-name"></span>
     <button id="undoBtn" disabled title="Deshacer la última edición aplicada">↶ Deshacer</button>
-    <button id="saveBtn" class="primary" disabled>Guardar copia</button>
+    <button id="saveBtn" class="primary" disabled title="Ctrl+S">Guardar…</button>
     <span id="status" class="status"></span>
     <span class="spacer"></span>
     <button id="settingsBtn">Ajustes</button>
   </header>
   <div class="stage" id="stage">
     <div id="pano"></div>
-    <div class="empty" id="empty">Elige una panorámica arriba para empezar.</div>
+    <div class="empty" id="empty">Pulsa «Abrir foto…» para buscar en tu ordenador la foto 360 que quieres editar,
+o arrástrala aquí.</div>
     <div class="frame" id="frame" hidden></div>
     <div class="stage-actions" id="stageActions" hidden>
       <button class="primary" id="editViewBtn">Editar esta vista</button>
@@ -157,9 +164,6 @@
 <dialog id="settings">
   <form method="dialog">
     <h2 style="margin-top:0;font-size:16px">Ajustes</h2>
-    <label class="small" for="photosDir">Carpeta de panorámicas</label>
-    <input type="text" id="photosDir" style="width:100%" placeholder="fotos" spellcheck="false">
-    <p class="hint">Ruta completa (p. ej. C:\Users\…\Visita molino\360) o relativa al editor. Las copias se guardan en su subcarpeta «editadas».</p>
     <label class="small" for="apiKey">API key de Google AI Studio</label>
     <input type="password" id="apiKey" style="width:100%" placeholder="Se guarda en config.json (no se sube a GitHub)" autocomplete="off">
     <p class="hint" id="keyState"></p>
@@ -171,6 +175,24 @@
     <div class="row">
       <button value="cancel">Cancelar</button>
       <button class="primary" id="saveSettings" value="ok">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="saveDlg">
+  <form method="dialog">
+    <h2 style="margin-top:0;font-size:16px">Guardar foto</h2>
+    <p class="hint" id="saveInfo"></p>
+    <div class="save-option">
+      <button class="primary" id="overwriteBtn" value="">Sobrescribir</button>
+      <span class="hint" id="overwriteHint"></span>
+    </div>
+    <div class="save-option">
+      <button id="saveAsBtn" value="">Guardar como…</button>
+      <span class="hint" id="saveAsHint">Eliges carpeta y nombre. A partir de ahí trabajas sobre ese archivo nuevo.</span>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button value="cancel">Cancelar</button>
     </div>
   </form>
 </dialog>
@@ -201,25 +223,18 @@ function busy(el, on, text) { $(el).classList.toggle('on', on); if (text) $(el +
 
 async function refresh() {
   state = await api('/api/state');
-  const sel = $('source');
-  const cur = sel.value || state.source || '';
-  sel.replaceChildren(new Option('Elige una panorámica…', ''), ...state.sources.map(s => new Option(s, s)));
-  sel.value = state.sources.includes(cur) ? cur : '';
+  $('fileName').textContent = state.name || '';
+  $('fileName').title = state.name || '';
   $('undoBtn').disabled = !state.undo;
-  $('saveBtn').disabled = !state.source;
+  $('saveBtn').disabled = !state.name;
   const st = $('status');
   st.className = 'status' + (state.dirty ? ' dirty' : '');
-  st.textContent = state.source
-    ? (state.dirty ? `Cambios sin guardar · se guardará en ${state.output}` : `${state.size[0]}×${state.size[1]} px`)
-    : '';
-  if (!state.source) closeViewer();
-  if (!state.photosExists) setEmpty(`No se encuentra la carpeta de panorámicas:\n${state.photosDir}\n\nCámbiala en Ajustes.`);
-  else if (!state.sources.length) setEmpty(`No hay panorámicas en:\n${state.photosDir}\n\nCopia ahí tus fotos 360 (equirectangulares, .jpg o .png) o elige otra carpeta en Ajustes.`);
-  else setEmpty('Elige una panorámica arriba para empezar.');
+  st.textContent = state.name ? (state.dirty ? 'Cambios sin guardar' : `${state.size[0]}×${state.size[1]} px`) : '';
+  document.title = (state.dirty ? '• ' : '') + (state.name ? state.name + ' · ' : '') + 'Editor 360 IA';
+  if (!state.name) closeViewer();
   if (!state.hasKey) toast('Configura tu API key de Gemini en Ajustes.', 'err');
 }
 
-function setEmpty(text) { $('empty').textContent = text; }
 function closeViewer() {
   if (viewer) { viewer.destroy(); viewer = null; }
   $('frame').hidden = true; $('stageActions').hidden = true; $('empty').hidden = false;
@@ -253,39 +268,162 @@ function placeFrame() {
 }
 window.addEventListener('resize', () => { placeFrame(); fitCanvas(); });
 
-$('source').addEventListener('change', async (e) => {
-  if (!e.target.value) return;
-  if (state.dirty && !confirm('Hay cambios sin guardar. ¿Abrir otra panorámica y perderlos?')) { e.target.value = state.source; return; }
-  busy('stageBusy', true, 'Abriendo a resolución completa…');
-  try { await api('/api/open', { source: e.target.value }); await refresh(); loadViewer(false); }
-  catch (err) { busy('stageBusy', false); toast(err.message, 'err'); }
+// ---------- Abrir ----------
+// Chrome y Edge permiten abrir con el explorador de archivos y volver a escribir en el
+// mismo archivo (File System Access API). En otros navegadores se usa un <input file>
+// y «guardar» descarga la foto.
+const FS_API = 'showOpenFilePicker' in window && 'showSaveFilePicker' in window;
+const PICKER_TYPES = [{ description: 'Fotos 360 (JPG o PNG)', accept: { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'] } }];
+let fileHandle = null;   // archivo en disco sobre el que se trabaja (si el navegador lo permite)
+
+const isAbort = (e) => e && e.name === 'AbortError';
+const confirmDiscard = () => !state?.dirty || confirm('Hay cambios sin guardar en la foto abierta. ¿Abrir otra y perderlos?');
+
+async function openPhoto() {
+  if (!confirmDiscard()) return;
+  if (!FS_API) return $('fileInput').click();
+  try {
+    const [h] = await window.showOpenFilePicker({ id: 'editor360', types: PICKER_TYPES, multiple: false });
+    await loadFile(await h.getFile(), h);
+  } catch (e) { if (!isAbort(e)) toast(e.message, 'err'); }
+}
+$('openBtn').onclick = openPhoto;
+$('fileInput').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (f) await loadFile(f, null);
+};
+
+async function loadFile(file, handle) {
+  if (!/\.(jpe?g|png)$/i.test(file.name)) return toast('Elige una foto JPG o PNG.', 'err');
+  busy('stageBusy', true, `Abriendo ${file.name} (${(file.size / 1048576).toFixed(1)} MB)…`);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: file,
+      headers: { 'X-Filename': encodeURIComponent(file.name), 'Content-Type': 'application/octet-stream' } });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'No se pudo abrir la foto');
+    fileHandle = handle;
+    await refresh(); loadViewer(false);
+    if (data.warning) toast(data.warning, 'err');
+  } catch (e) { busy('stageBusy', false); toast(e.message, 'err'); }
+}
+
+// Arrastrar y soltar una foto sobre el visor
+const stage = $('stage');
+stage.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); stage.classList.add('drop'); } });
+stage.addEventListener('dragleave', (e) => { if (e.target === stage || !stage.contains(e.relatedTarget)) stage.classList.remove('drop'); });
+stage.addEventListener('drop', async (e) => {
+  e.preventDefault(); stage.classList.remove('drop');
+  const item = [...e.dataTransfer.items].find(i => i.kind === 'file');
+  if (!item || !confirmDiscard()) return;
+  // En Chrome/Edge se obtiene también el «handle» para poder sobrescribir el archivo
+  const handle = item.getAsFileSystemHandle ? await item.getAsFileSystemHandle().catch(() => null) : null;
+  await loadFile(item.getAsFile(), handle && handle.kind === 'file' ? handle : null);
 });
 
 $('undoBtn').onclick = async () => {
   try { await api('/api/undo', {}); await refresh(); loadViewer(true); toast('Edición deshecha'); }
   catch (e) { toast(e.message, 'err'); }
 };
-$('saveBtn').onclick = async () => {
-  busy('stageBusy', true, 'Guardando…');
-  try { const r = await api('/api/save', {}); await refresh(); toast('Guardado en ' + r.saved); }
-  catch (e) { toast(e.message, 'err'); } finally { busy('stageBusy', false); }
+
+// ---------- Guardar ----------
+function extOf(name) { const m = /\.[^.]+$/.exec(name || ''); return m ? m[0].toLowerCase() : '.jpg'; }
+function suggestedName() {
+  const ext = extOf(state.name), stem = state.name.slice(0, state.name.length - ext.length);
+  return (stem.endsWith('-editada') ? stem : stem + '-editada') + ext;
+}
+
+$('saveBtn').onclick = openSaveDialog;
+function openSaveDialog() {
+  if (!state?.name) return;
+  $('saveInfo').textContent = `Se guarda la foto completa (${state.size[0]}×${state.size[1]} px) con sus datos 360 originales.`;
+  const canOverwrite = !!fileHandle;
+  $('overwriteBtn').textContent = `Sobrescribir «${state.name}»`;
+  $('overwriteBtn').disabled = !canOverwrite;
+  $('overwriteHint').textContent = canOverwrite
+    ? 'Reemplaza el archivo que estás editando. Lo que había antes en él se pierde.'
+    : (FS_API ? 'No disponible: la foto se abrió sin acceso al archivo. Ábrela con «Abrir foto…».'
+              : 'Tu navegador no permite escribir en tus archivos. Usa Chrome o Edge para sobrescribir.');
+  $('saveAsBtn').textContent = FS_API ? 'Guardar como…' : `Descargar como «${suggestedName()}»`;
+  $('saveAsHint').textContent = FS_API
+    ? 'Eliges carpeta y nombre. A partir de ahí, «Sobrescribir» guarda en ese archivo nuevo.'
+    : 'Se guarda en tu carpeta de descargas.';
+  $('saveDlg').showModal();
+}
+
+$('overwriteBtn').onclick = async (e) => {
+  e.preventDefault();
+  if (!confirm(`¿Sobrescribir «${fileHandle.name}»? No se puede deshacer.`)) return;
+  $('saveDlg').close();
+  await writeTo(fileHandle);
 };
+
+$('saveAsBtn').onclick = async (e) => {
+  e.preventDefault();
+  $('saveDlg').close();
+  const name = suggestedName(), png = extOf(name) === '.png';
+  if (!FS_API) return downloadAs(name);
+  try {
+    const h = await window.showSaveFilePicker({
+      id: 'editor360', suggestedName: name, startIn: fileHandle || undefined,
+      types: [png ? { description: 'Imagen PNG', accept: { 'image/png': ['.png'] } }
+                  : { description: 'Imagen JPG', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } }],
+    });
+    if (await writeTo(h)) fileHandle = h;
+  } catch (err) { if (!isAbort(err)) toast(err.message, 'err'); }
+};
+
+async function exportBlob(name) {
+  const r = await fetch('/api/export?fmt=' + (extOf(name) === '.png' ? 'png' : 'jpeg'));
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'No se pudo preparar la foto');
+  return { blob: await r.blob(), version: +r.headers.get('X-Version') };
+}
+
+async function writeTo(handle) {
+  busy('stageBusy', true, `Guardando ${handle.name}…`);
+  try {
+    if ((await handle.queryPermission({ mode: 'readwrite' })) !== 'granted' &&
+        (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted')
+      throw new Error('Sin permiso para escribir en ' + handle.name);
+    const { blob, version } = await exportBlob(handle.name);
+    const w = await handle.createWritable();
+    await w.write(blob); await w.close();
+    await api('/api/saved', { version, name: handle.name });
+    await refresh();
+    toast(`Guardado: ${handle.name} (${(blob.size / 1048576).toFixed(1)} MB)`);
+    return true;
+  } catch (e) { if (!isAbort(e)) toast('No se pudo guardar: ' + e.message, 'err'); return false; }
+  finally { busy('stageBusy', false); }
+}
+
+async function downloadAs(name) {
+  busy('stageBusy', true, 'Preparando la descarga…');
+  try {
+    const { blob, version } = await exportBlob(name);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    await api('/api/saved', { version, name });
+    await refresh(); toast('Descargado: ' + name);
+  } catch (e) { toast(e.message, 'err'); }
+  finally { busy('stageBusy', false); }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || $('modal').classList.contains('open')) return;
+  if (e.key.toLowerCase() === 's') { e.preventDefault(); openSaveDialog(); }
+  if (e.key.toLowerCase() === 'o') { e.preventDefault(); openPhoto(); }
+});
 
 // ---------- Ajustes ----------
 $('settingsBtn').onclick = () => {
-  $('apiKey').value = ''; $('model').value = state?.model || ''; $('photosDir').value = state?.photosSetting || '';
+  $('apiKey').value = ''; $('model').value = state?.model || '';
   $('keyState').textContent = state?.hasKey ? 'Hay una clave guardada. Déjalo vacío para mantenerla.' : 'Todavía no hay clave. Consíguela en aistudio.google.com.';
   $('settings').showModal();
 };
 $('saveSettings').onclick = async (e) => {
   e.preventDefault();
-  const body = { api_key: $('apiKey').value, model: $('model').value, photos_dir: $('photosDir').value };
   try {
-    try { await api('/api/config', body); }
-    catch (err) {
-      if (!/sin guardar/.test(err.message) || !confirm(err.message + ' ¿Cambiar de carpeta y perderlos?')) throw err;
-      await api('/api/config', { ...body, discard: true });
-    }
+    await api('/api/config', { api_key: $('apiKey').value, model: $('model').value });
     $('settings').close(); await refresh(); toast('Ajustes guardados');
   } catch (err) { toast(err.message, 'err'); }
 };
@@ -444,7 +582,7 @@ $('applyBtn').onclick = async () => {
 };
 
 window.addEventListener('beforeunload', (e) => { if (state?.dirty) { e.preventDefault(); e.returnValue = ''; } });
-refresh().then(() => { if (state.source) { $('source').value = state.source; loadViewer(false); } })
+refresh().then(() => { if (state.name) loadViewer(false); })
   .catch(e => toast('No hay conexión con el servidor del editor: ' + e.message, 'err'));
 </script>
 </body>
