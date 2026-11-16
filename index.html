@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor 360 IA</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
+<script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+<style>
+  :root {
+    --bg: #141416; --panel: #1e1f23; --line: #33353b; --text: #ececf0; --muted: #9a9ca5;
+    --accent: #e0a64a; --accent-ink: #1a1408; --danger: #e06464; --ok: #6cc28c;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, "Segoe UI", sans-serif; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button { background: #2a2c31; border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: #555861; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  select, input[type=text], input[type=password], textarea {
+    background: #121315; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  textarea { width: 100%; resize: vertical; min-height: 64px; }
+
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  header { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: .2px; }
+  header .spacer { flex: 1; }
+  #source { min-width: 220px; max-width: 340px; }
+  .status { color: var(--muted); font-size: 13px; }
+  .status.dirty { color: var(--accent); }
+
+  .stage { position: relative; overflow: hidden; }
+  #pano { position: absolute; inset: 0; }
+  .frame { position: absolute; pointer-events: none; border: 2px solid rgba(255,255,255,.85);
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.35); border-radius: 2px; }
+  .frame::after { content: "Zona que se editará"; position: absolute; top: 8px; left: 10px; font-size: 12px;
+    background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 6px; }
+  .stage-actions { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 8px; }
+  .stage-actions button { padding: 10px 18px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
+    white-space: pre-line; text-align: center; padding: 24px; overflow-wrap: anywhere; }
+
+  /* Editor de vista */
+  .modal { position: fixed; inset: 0; background: rgba(8,8,10,.92); display: none; z-index: 50; }
+  .modal.open { display: grid; grid-template-columns: 1fr 320px; }
+  .canvas-wrap { position: relative; display: grid; place-items: center; padding: 16px; min-width: 0; min-height: 0; }
+  .canvas-box { position: relative; touch-action: none; }
+  .canvas-box canvas, .canvas-box img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 4px; }
+  #maskCanvas { opacity: .5; cursor: none; }
+  #resultImg { display: none; }
+  .canvas-box.showing-result #resultImg { display: block; }
+  .canvas-box.showing-result #maskCanvas { display: none; }
+  #cursor { position: absolute; pointer-events: none; border: 1.5px solid #fff; border-radius: 50%; mix-blend-mode: difference; display: none; }
+  .side { background: var(--panel); border-left: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
+  .side h2 { font-size: 14px; margin: 0; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; background: #121315; border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+  .seg button { border: 0; background: transparent; border-radius: 7px; }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > * { flex: 1; }
+  label.small { color: var(--muted); font-size: 12px; display: block; margin-bottom: 4px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .result-actions { display: none; flex-direction: column; gap: 8px; }
+  .has-result .result-actions { display: flex; }
+  .has-result .edit-controls { opacity: .5; }
+  .msg { font-size: 13px; padding: 8px 10px; border-radius: 8px; display: none; }
+  .msg.err { display: block; background: rgba(224,100,100,.12); color: #f3a3a3; border: 1px solid rgba(224,100,100,.35); }
+  .msg.warn { display: block; background: rgba(224,166,74,.12); color: #f0c98a; border: 1px solid rgba(224,166,74,.4); }
+  .msg.ok { display: block; background: rgba(108,194,140,.12); color: #a7e2bd; border: 1px solid rgba(108,194,140,.35); }
+  .busy { position: absolute; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.45); z-index: 5; }
+  .busy.on { display: grid; }
+  .busy div { background: var(--panel); padding: 14px 20px; border-radius: 10px; border: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+  .spin { width: 16px; height: 16px; border: 2px solid #555; border-top-color: var(--accent); border-radius: 50%; animation: s 0.8s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px; width: min(440px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog .row { margin-top: 10px; }
+  .toast { position: fixed; right: 16px; bottom: 16px; z-index: 99; max-width: 420px; }
+
+  @media (max-width: 800px) {
+    .modal.open { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    .side { border-left: 0; border-top: 1px solid var(--line); max-height: 48vh; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Editor 360 · IA</h1>
+    <select id="source"><option value="">Elige una panorámica…</option></select>
+    <button id="undoBtn" disabled title="Deshacer la última edición aplicada">↶ Deshacer</button>
+    <button id="saveBtn" class="primary" disabled>Guardar copia</button>
+    <span id="status" class="status"></span>
+    <span class="spacer"></span>
+    <button id="settingsBtn">Ajustes</button>
+  </header>
+  <div class="stage" id="stage">
+    <div id="pano"></div>
+    <div class="empty" id="empty">Elige una panorámica arriba para empezar.</div>
+    <div class="frame" id="frame" hidden></div>
+    <div class="stage-actions" id="stageActions" hidden>
+      <button class="primary" id="editViewBtn">Editar esta vista</button>
+    </div>
+    <div class="busy" id="stageBusy"><div><span class="spin"></span><span id="stageBusyText">Cargando…</span></div></div>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="canvas-wrap" id="canvasWrap">
+    <div class="canvas-box" id="canvasBox">
+      <img id="cropImg" alt="">
+      <canvas id="maskCanvas"></canvas>
+      <img id="resultImg" alt="">
+      <div id="cursor"></div>
+    </div>
+    <div class="busy" id="aiBusy"><div><span class="spin"></span><span id="aiBusyText">Gemini está editando…</span></div></div>
+  </div>
+  <aside class="side" id="side">
+    <h2>Editar vista</h2>
+    <div class="edit-controls">
+      <div class="seg" id="modeSeg">
+        <button data-mode="remove" class="on">Quitar</button>
+        <button data-mode="add">Añadir</button>
+      </div>
+      <div style="margin-top:12px">
+        <label class="small" id="promptLabel" for="prompt">Qué quitar (opcional)</label>
+        <textarea id="prompt" placeholder="p. ej. el cubo amarillo y su sombra"></textarea>
+      </div>
+      <div style="margin-top:12px">
+        <label class="small">Pincel: <span id="brushVal">60</span> px · teclas [ y ]</label>
+        <input type="range" id="brush" min="8" max="300" value="60" style="width:100%">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="eraserBtn">Goma</button>
+        <button id="clearBtn">Limpiar</button>
+      </div>
+      <p class="hint" id="modeHint">Pinta encima de lo que quieres quitar, cubriéndolo con algo de margen.</p>
+      <button class="primary" id="generateBtn" style="width:100%">Generar con IA</button>
+    </div>
+    <div class="result-actions">
+      <div class="msg ok" id="resultInfo"></div>
+      <button id="compareBtn">Mantén pulsado para ver el original</button>
+      <button class="primary" id="applyBtn">Aplicar a la panorámica</button>
+      <button id="retryBtn">Otra variante</button>
+      <button id="discardBtn">Descartar y seguir pintando</button>
+    </div>
+    <div class="msg" id="sideMsg"></div>
+    <span class="spacer" style="flex:1"></span>
+    <button id="closeBtn">Volver a la panorámica</button>
+  </aside>
+</div>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2 style="margin-top:0;font-size:16px">Ajustes</h2>
+    <label class="small" for="photosDir">Carpeta de panorámicas</label>
+    <input type="text" id="photosDir" style="width:100%" placeholder="fotos" spellcheck="false">
+    <p class="hint">Ruta completa (p. ej. C:\Users\…\Visita molino\360) o relativa al editor. Las copias se guardan en su subcarpeta «editadas».</p>
+    <label class="small" for="apiKey">API key de Google AI Studio</label>
+    <input type="password" id="apiKey" style="width:100%" placeholder="Se guarda en config.json (no se sube a GitHub)" autocomplete="off">
+    <p class="hint" id="keyState"></p>
+    <label class="small" for="model">Modelo</label>
+    <input type="text" id="model" style="width:100%" list="models">
+    <datalist id="models">
+      <option value="gemini-3.1-flash-image"><option value="gemini-3-pro-image-preview"><option value="gemini-2.5-flash-image">
+    </datalist>
+    <div class="row">
+      <button value="cancel">Cancelar</button>
+      <button class="primary" id="saveSettings" value="ok">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast"><div class="msg" id="toast"></div></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = null, viewer = null, mode = 'remove', erasing = false, brush = 60;
+let crop = null;      // {yaw, pitch, fov}
+let resultId = null;
+const MASK_RES = 1024;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({ error: 'Respuesta no válida del servidor' }));
+  if (!r.ok) throw new Error(data.error || ('Error ' + r.status));
+  return data;
+}
+
+function toast(text, kind = 'ok') {
+  const t = $('toast'); t.className = 'msg ' + kind; t.textContent = text;
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.className = 'msg', kind === 'err' ? 8000 : 4000);
+}
+function sideMsg(text, kind = 'err') { const m = $('sideMsg'); m.className = text ? 'msg ' + kind : 'msg'; m.textContent = text || ''; }
+function busy(el, on, text) { $(el).classList.toggle('on', on); if (text) $(el + 'Text').textContent = text; }
+
+async function refresh() {
+  state = await api('/api/state');
+  const sel = $('source');
+  const cur = sel.value || state.source || '';
+  sel.replaceChildren(new Option('Elige una panorámica…', ''), ...state.sources.map(s => new Option(s, s)));
+  sel.value = state.sources.includes(cur) ? cur : '';
+  $('undoBtn').disabled = !state.undo;
+  $('saveBtn').disabled = !state.source;
+  const st = $('status');
+  st.className = 'status' + (state.dirty ? ' dirty' : '');
+  st.textContent = state.source
+    ? (state.dirty ? `Cambios sin guardar · se guardará en ${state.output}` : `${state.size[0]}×${state.size[1]} px`)
+    : '';
+  if (!state.source) closeViewer();
+  if (!state.photosExists) setEmpty(`No se encuentra la carpeta de panorámicas:\n${state.photosDir}\n\nCámbiala en Ajustes.`);
+  else if (!state.sources.length) setEmpty(`No hay panorámicas en:\n${state.photosDir}\n\nCopia ahí tus fotos 360 (equirectangulares, .jpg o .png) o elige otra carpeta en Ajustes.`);
+  else setEmpty('Elige una panorámica arriba para empezar.');
+  if (!state.hasKey) toast('Configura tu API key de Gemini en Ajustes.', 'err');
+}
+
+function setEmpty(text) { $('empty').textContent = text; }
+function closeViewer() {
+  if (viewer) { viewer.destroy(); viewer = null; }
+  $('frame').hidden = true; $('stageActions').hidden = true; $('empty').hidden = false;
+}
+
+function loadViewer(keep) {
+  const view = keep && viewer ? { yaw: viewer.getYaw(), pitch: viewer.getPitch(), hfov: viewer.getHfov() } : { yaw: 0, pitch: 0, hfov: 90 };
+  if (viewer) viewer.destroy();
+  busy('stageBusy', true, 'Cargando panorámica…');
+  viewer = pannellum.viewer('pano', {
+    type: 'equirectangular', panorama: '/api/view.jpg?v=' + state.version + '&t=' + Date.now(),
+    autoLoad: true, showControls: true, compass: false, ...view, minHfov: 25, maxHfov: 120,
+  });
+  viewer.on('load', () => { busy('stageBusy', false); $('frame').hidden = false; $('stageActions').hidden = false; placeFrame(); });
+  viewer.on('error', (e) => { busy('stageBusy', false); toast('No se pudo cargar: ' + e, 'err'); });
+  $('empty').hidden = true;
+}
+
+// Cuadrado central = lo que se recorta. Su FOV se calcula desde el hfov del visor.
+function frameFov() {
+  const st = $('stage'), W = st.clientWidth, H = st.clientHeight, side = Math.min(W, H) * 0.92;
+  const h = viewer.getHfov() * Math.PI / 180;
+  return { side, fov: 2 * Math.atan(Math.tan(h / 2) * side / W) * 180 / Math.PI };
+}
+function placeFrame() {
+  if (!viewer) return;
+  const st = $('stage'), { side } = frameFov(), f = $('frame');
+  f.style.width = f.style.height = side + 'px';
+  f.style.left = (st.clientWidth - side) / 2 + 'px';
+  f.style.top = (st.clientHeight - side) / 2 + 'px';
+}
+window.addEventListener('resize', () => { placeFrame(); fitCanvas(); });
+
+$('source').addEventListener('change', async (e) => {
+  if (!e.target.value) return;
+  if (state.dirty && !confirm('Hay cambios sin guardar. ¿Abrir otra panorámica y perderlos?')) { e.target.value = state.source; return; }
+  busy('stageBusy', true, 'Abriendo a resolución completa…');
+  try { await api('/api/open', { source: e.target.value }); await refresh(); loadViewer(false); }
+  catch (err) { busy('stageBusy', false); toast(err.message, 'err'); }
+});
+
+$('undoBtn').onclick = async () => {
+  try { await api('/api/undo', {}); await refresh(); loadViewer(true); toast('Edición deshecha'); }
+  catch (e) { toast(e.message, 'err'); }
+};
+$('saveBtn').onclick = async () => {
+  busy('stageBusy', true, 'Guardando…');
+  try { const r = await api('/api/save', {}); await refresh(); toast('Guardado en ' + r.saved); }
+  catch (e) { toast(e.message, 'err'); } finally { busy('stageBusy', false); }
+};
+
+// ---------- Ajustes ----------
+$('settingsBtn').onclick = () => {
+  $('apiKey').value = ''; $('model').value = state?.model || ''; $('photosDir').value = state?.photosSetting || '';
+  $('keyState').textContent = state?.hasKey ? 'Hay una clave guardada. Déjalo vacío para mantenerla.' : 'Todavía no hay clave. Consíguela en aistudio.google.com.';
+  $('settings').showModal();
+};
+$('saveSettings').onclick = async (e) => {
+  e.preventDefault();
+  const body = { api_key: $('apiKey').value, model: $('model').value, photos_dir: $('photosDir').value };
+  try {
+    try { await api('/api/config', body); }
+    catch (err) {
+      if (!/sin guardar/.test(err.message) || !confirm(err.message + ' ¿Cambiar de carpeta y perderlos?')) throw err;
+      await api('/api/config', { ...body, discard: true });
+    }
+    $('settings').close(); await refresh(); toast('Ajustes guardados');
+  } catch (err) { toast(err.message, 'err'); }
+};
+
+// ---------- Editor de vista ----------
+const mask = $('maskCanvas'), mctx = mask.getContext('2d');
+mask.width = mask.height = MASK_RES;
+
+$('editViewBtn').onclick = () => {
+  const { fov } = frameFov();
+  crop = { yaw: viewer.getYaw(), pitch: viewer.getPitch(), fov };
+  $('cropImg').src = `/api/crop?yaw=${crop.yaw}&pitch=${crop.pitch}&fov=${fov}&v=${state.version}`;
+  mctx.clearRect(0, 0, MASK_RES, MASK_RES);
+  setResult(null); sideMsg(''); edgeAck = ''; $('generateBtn').textContent = 'Generar con IA';
+  $('modal').classList.add('open');
+  fitCanvas();
+};
+$('closeBtn').onclick = () => { $('modal').classList.remove('open'); setResult(null); };
+
+function fitCanvas() {
+  const wrap = $('canvasWrap'); if (!$('modal').classList.contains('open')) return;
+  const s = Math.max(200, Math.min(wrap.clientWidth, wrap.clientHeight) - 32);
+  $('canvasBox').style.width = $('canvasBox').style.height = s + 'px';
+}
+
+document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x === b));
+  $('promptLabel').textContent = mode === 'remove' ? 'Qué quitar (opcional)' : 'Qué añadir';
+  $('prompt').placeholder = mode === 'remove' ? 'p. ej. el cubo amarillo y su sombra' : 'p. ej. un banco de madera antiguo apoyado en la pared';
+  $('modeHint').textContent = mode === 'remove'
+    ? 'Pinta encima de lo que quieres quitar, cubriéndolo con algo de margen.'
+    : 'Pinta la zona donde debe aparecer el objeto, del tamaño aproximado que tendría.';
+});
+
+$('brush').oninput = (e) => { brush = +e.target.value; $('brushVal').textContent = brush; };
+$('eraserBtn').onclick = () => { erasing = !erasing; $('eraserBtn').classList.toggle('primary', erasing); };
+$('clearBtn').onclick = () => { mctx.clearRect(0, 0, MASK_RES, MASK_RES); updateEdgeWarning(); };
+document.addEventListener('keydown', (e) => {
+  if (!$('modal').classList.contains('open') || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '[' || e.key === ']') {
+    brush = Math.max(8, Math.min(300, brush + (e.key === ']' ? 10 : -10)));
+    $('brush').value = brush; $('brushVal').textContent = brush;
+  }
+  if (e.key === 'e') $('eraserBtn').click();
+});
+
+let drawing = false, last = null;
+function toMask(e) {
+  const r = mask.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * MASK_RES, y: (e.clientY - r.top) / r.height * MASK_RES, scale: MASK_RES / r.width };
+}
+function stroke(p) {
+  mctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
+  mctx.strokeStyle = mctx.fillStyle = '#ff3b3b';
+  mctx.lineCap = mctx.lineJoin = 'round';
+  mctx.lineWidth = brush * p.scale;
+  mctx.beginPath();
+  if (last) { mctx.moveTo(last.x, last.y); mctx.lineTo(p.x, p.y); mctx.stroke(); }
+  else { mctx.arc(p.x, p.y, brush * p.scale / 2, 0, Math.PI * 2); mctx.fill(); }
+  last = p;
+}
+mask.addEventListener('pointerdown', (e) => { if (resultId) return; drawing = true; last = null; mask.setPointerCapture(e.pointerId); stroke(toMask(e)); });
+mask.addEventListener('pointermove', (e) => {
+  const c = $('cursor'), r = $('canvasBox').getBoundingClientRect();
+  c.style.display = 'block'; c.style.width = c.style.height = brush + 'px';
+  c.style.left = (e.clientX - r.left - brush / 2) + 'px'; c.style.top = (e.clientY - r.top - brush / 2) + 'px';
+  if (drawing) stroke(toMask(e));
+});
+mask.addEventListener('pointerup', () => { drawing = false; last = null; updateEdgeWarning(); });
+mask.addEventListener('pointerleave', () => { $('cursor').style.display = 'none'; });
+
+function maskIsEmpty() {
+  const d = mctx.getImageData(0, 0, MASK_RES, MASK_RES).data;
+  for (let i = 3; i < d.length; i += 4 * 7) if (d[i] > 20) return false;
+  return true;
+}
+
+// Bordes del recuadro que toca la máscara (lo que queda fuera no se puede editar).
+const EDGE = 6;
+function maskEdges() {
+  const d = mctx.getImageData(0, 0, MASK_RES, MASK_RES).data, R = MASK_RES;
+  const hit = (x, y) => d[(y * R + x) * 4 + 3] > 20;
+  const edges = new Set();
+  for (let i = 0; i < R; i += 2) {
+    for (let k = 0; k < EDGE; k++) {
+      if (hit(i, k)) edges.add('arriba');
+      if (hit(i, R - 1 - k)) edges.add('abajo');
+      if (hit(k, i)) edges.add('izquierda');
+      if (hit(R - 1 - k, i)) edges.add('derecha');
+    }
+  }
+  return [...edges];
+}
+const edgeDir = { izquierda: 'a la izquierda', derecha: 'a la derecha', arriba: 'hacia arriba', abajo: 'hacia abajo' };
+let edgeAck = '';
+function edgeWarningText(edges) {
+  const name = { izquierda: 'izquierdo', derecha: 'derecho', arriba: 'superior', abajo: 'inferior' };
+  const list = edges.map(e => name[e]);
+  const join = (a) => a.length > 1 ? a.slice(0, -1).join(', ') + ' y ' + a.at(-1) : a[0];
+  const which = list.length > 1 ? `los bordes ${join(list)}` : `el borde ${list[0]}`;
+  return `La máscara toca ${which} del recuadro. Si el objeto sigue fuera, ese trozo no se editará y quedará cortado. ` +
+    `Vuelve a la panorámica, gira ${join(edges.map(e => edgeDir[e]))} o aleja la vista, y edita de nuevo.`;
+}
+function updateEdgeWarning() {
+  if (resultId) return;
+  const edges = maskEdges();
+  if (edges.length) sideMsg(edgeWarningText(edges), 'warn');
+  else if ($('sideMsg').classList.contains('warn')) sideMsg('');
+  $('generateBtn').textContent = edges.length && edgeAck === edges.join() ? 'Generar de todas formas' : 'Generar con IA';
+}
+
+function setResult(r) {
+  resultId = r ? r.id : null;
+  $('side').classList.toggle('has-result', !!r);
+  $('canvasBox').classList.toggle('showing-result', !!r);
+  if (r) { $('resultImg').src = r.image; $('resultInfo').textContent = `Listo en ${r.seconds} s. Revisa el resultado.`; }
+}
+
+async function generate() {
+  if (maskIsEmpty()) return sideMsg('Pinta primero la zona a editar.');
+  if (mode === 'add' && !$('prompt').value.trim()) return sideMsg('Describe qué quieres añadir.');
+  const edges = maskEdges();
+  if (mode === 'remove' && edges.length && edgeAck !== edges.join() && !resultId) {
+    // Primera pulsación: avisar. La segunda genera igualmente.
+    edgeAck = edges.join();
+    sideMsg(edgeWarningText(edges) + ' Pulsa otra vez si aun así quieres generar.', 'warn');
+    $('generateBtn').textContent = 'Generar de todas formas';
+    return;
+  }
+  sideMsg(''); busy('aiBusy', true, mode === 'remove' ? 'Gemini está quitando el elemento…' : 'Gemini está añadiendo el elemento…');
+  try {
+    const r = await api('/api/edit', { ...crop, mode, prompt: $('prompt').value, mask: mask.toDataURL('image/png') });
+    setResult(r);
+  } catch (e) { sideMsg(e.message); }
+  finally { busy('aiBusy', false); }
+}
+$('generateBtn').onclick = generate;
+$('retryBtn').onclick = generate;
+$('discardBtn').onclick = () => { setResult(null); sideMsg(''); updateEdgeWarning(); };
+
+const cmp = $('compareBtn');
+const showOrig = (on) => { if (resultId) $('canvasBox').classList.toggle('showing-result', !on); };
+cmp.addEventListener('pointerdown', () => showOrig(true));
+['pointerup', 'pointerleave'].forEach(ev => cmp.addEventListener(ev, () => showOrig(false)));
+
+$('applyBtn').onclick = async () => {
+  busy('aiBusy', true, 'Fusionando con la panorámica completa…');
+  try {
+    await api('/api/apply', { id: resultId });
+    $('modal').classList.remove('open'); setResult(null);
+    await refresh(); loadViewer(true);
+    toast('Edición aplicada. Recuerda guardar la copia.');
+  } catch (e) { sideMsg(e.message); }
+  finally { busy('aiBusy', false); }
+};
+
+window.addEventListener('beforeunload', (e) => { if (state?.dirty) { e.preventDefault(); e.returnValue = ''; } });
+refresh().then(() => { if (state.source) { $('source').value = state.source; loadViewer(false); } })
+  .catch(e => toast('No hay conexión con el servidor del editor: ' + e.message, 'err'));
+</script>
+</body>
+</html>

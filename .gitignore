@@ -1,0 +1,12 @@
+# Clave de API y ajustes locales: nunca se suben
+config.json
+
+# Panorámicas y copias editadas (pesan mucho y son privadas)
+fotos/*
+!fotos/.gitkeep
+
+__pycache__/
+*.pyc
+.claude/settings.local.json
+Thumbs.db
+.DS_Store
