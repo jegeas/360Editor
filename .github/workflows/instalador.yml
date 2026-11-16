@@ -1,0 +1,96 @@
+# Construye el instalador de Windows del Editor 360.
+# - Al subir cambios del programa a main: lo construye, lo prueba y lo deja como artefacto
+#   descargable en la pestaña Actions (para comprobar que todo sigue funcionando).
+# - Al publicar una etiqueta vX.Y.Z (git tag v1.0.0 && git push origin v1.0.0): además crea una
+#   versión (Release) en GitHub con el instalador adjunto, lista para que la gente lo descargue.
+# - También se puede lanzar a mano desde Actions -> «Instalador de Windows» -> Run workflow.
+
+name: Instalador de Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "server.py"
+      - "providers.py"
+      - "paths.py"
+      - "index.html"
+      - "requirements.txt"
+      - "installer/**"
+      - ".github/workflows/instalador.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write     # necesario para crear la Release con el instalador
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt onnxruntime pyinstaller
+
+      - name: Comprobar que la etiqueta coincide con la versión del programa
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $code = (python -c "import paths; print(paths.VERSION)").Trim()
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($code -ne $tag) { throw "La etiqueta es v$tag pero paths.py dice VERSION = $code. Cambia una de las dos." }
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Construir ejecutable e instalador
+        shell: pwsh
+        run: ./installer/build.ps1
+
+      - name: Probar el ejecutable
+        shell: pwsh
+        run: |
+          $exe = Start-Process -FilePath "dist\Editor 360\Editor 360.exe" -ArgumentList "8399" -PassThru
+          $state = $null
+          for ($i = 0; $i -lt 60 -and -not $state; $i++) {
+            Start-Sleep -Seconds 2
+            try { $state = Invoke-RestMethod http://127.0.0.1:8399/api/state } catch {}
+          }
+          if (-not $state) { Get-Content "$env:APPDATA\Editor 360\editor.log" -ErrorAction SilentlyContinue; throw "El editor no ha arrancado" }
+          $page = Invoke-WebRequest http://127.0.0.1:8399/ -UseBasicParsing
+          if ($page.Content -notmatch "Editor 360") { throw "La página del editor no se sirve" }
+          $local = $state.providers | Where-Object { $_.id -eq "local" }
+          if (-not $local.local.runtime) { throw "onnxruntime no está incluido en el ejecutable" }
+          "Versión $($state.app), frozen=$($state.frozen), proveedores: $(($state.providers.id) -join ', ')"
+          Invoke-RestMethod -Method Post http://127.0.0.1:8399/api/shutdown -Body "{}" | Out-Null
+          if (-not $exe.WaitForExit(15000)) { $exe.Kill(); throw "El editor no se cerró con /api/shutdown" }
+          "Arranque, página, onnxruntime y cierre: correctos"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: instalador-windows
+          path: dist/Instalar-Editor-360-*.exe
+          if-no-files-found: error
+
+      - name: Publicar la versión en GitHub
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          Descarga **Instalar-Editor-360-*.exe**, ábrelo y sigue los pasos. No hace falta tener Python.
+
+          La primera vez, Windows puede avisar «Windows protegió su PC» porque el instalador no está firmado:
+          pulsa **Más información → Ejecutar de todas formas**.
+          "@
+          gh release create "${{ github.ref_name }}" (Get-ChildItem dist\Instalar-Editor-360-*.exe).FullName `
+            --title "Editor 360 ${{ github.ref_name }}" --notes $notes

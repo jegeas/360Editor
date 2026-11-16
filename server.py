@@ -7,7 +7,8 @@ Flujo:
   4. El resultado se fusiona solo dentro de la máscara y se reproyecta de vuelta
      a la panorámica a resolución completa.
 
-Arranque:  python server.py   ->  http://localhost:8361
+Arranque:  python server.py [puerto]   ->  http://localhost:8361
+           o el instalador de Windows (ver installer/).
 
 El navegador abre la foto del ordenador del usuario y la sube a este servidor
 local; al guardar, el navegador escribe la panorámica editada donde el usuario
@@ -30,12 +31,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 import numpy as np
 from PIL import Image, ImageFilter
 
+from paths import APP_NAME, CONFIG_FILE, FROZEN, LOG_FILE, RESOURCES, VERSION
 from providers import LOCAL, PROVIDERS
 
 Image.MAX_IMAGE_PIXELS = None
 
-HERE = Path(__file__).resolve().parent
-CONFIG_FILE = HERE / "config.json"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("EDITOR_PORT", "8361"))
 DEFAULT_PROVIDER = "gemini"
 VIEW_WIDTH = 4096          # resolución de la panorámica que ve el navegador
@@ -399,10 +399,11 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             if u.path in ("/", "/index.html"):
-                return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+                return self.send(200, (RESOURCES / "index.html").read_bytes(), "text/html; charset=utf-8")
             if u.path == "/api/state":
                 active, providers = providers_state()
                 return self.send(200, {
+                    "app": VERSION, "frozen": FROZEN,
                     "name": S.name, "version": S.version, "undo": len(S.undo), "dirty": S.dirty,
                     "provider": active, "providers": providers,
                     "anyReady": any(p["ready"] for p in providers),
@@ -485,6 +486,11 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/local/install":
                 LOCAL.install()
                 return self.send(200, LOCAL.status())
+
+            if u.path == "/api/shutdown":
+                self.send(200, {"ok": True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
 
             if u.path == "/api/local/warmup":
                 LOCAL.warmup()
@@ -594,20 +600,44 @@ class Server(ThreadingHTTPServer):
         super().server_bind()
 
 
+def editor_running(port):
+    """¿Hay ya un Editor 360 respondiendo en ese puerto?"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=2) as r:
+            return "providers" in json.loads(r.read())
+    except Exception:
+        return False
+
+
 def main():
+    url = f"http://localhost:{PORT}"
+    if FROZEN:
+        # Un .exe sin consola no tiene dónde escribir: los mensajes van a un registro.
+        log = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = log
     try:
         srv = Server(("127.0.0.1", PORT), Handler)
     except OSError:
+        if FROZEN and editor_running(PORT):
+            import webbrowser
+            webbrowser.open(url)        # ya estaba abierto: solo se muestra
+            return
         print(f"El puerto {PORT} ya está en uso: probablemente el editor ya está abierto.")
-        print(f"Ábrelo en http://localhost:{PORT} o cierra la otra ventana del editor.")
+        print(f"Ábrelo en {url} o cierra la otra ventana del editor.")
         sys.exit(1)
-    print(f"Editor 360 en http://localhost:{PORT}")
+    print(f"{APP_NAME} {VERSION} en {url}")
     if read_config_file()["provider"] == "local":
         LOCAL.warmup()          # adelanta la carga del modelo local
+    if FROZEN:
+        import webbrowser
+        threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        srv.server_close()
 
 
 if __name__ == "__main__":

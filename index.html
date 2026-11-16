@@ -117,6 +117,7 @@
     <span id="status" class="status"></span>
     <span class="spacer"></span>
     <button id="settingsBtn">Ajustes</button>
+    <button id="quitBtn" title="Cierra el editor (el programa deja de ejecutarse)">Cerrar editor</button>
   </header>
   <div class="stage" id="stage">
     <div id="pano"></div>
@@ -460,6 +461,19 @@ document.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 's') { e.preventDefault(); openSaveDialog(); }
   if (e.key.toLowerCase() === 'o') { e.preventDefault(); openPhoto(); }
 });
+
+// ---------- Cerrar el editor ----------
+$('quitBtn').onclick = async () => {
+  const q = state?.dirty
+    ? 'Hay cambios sin guardar en la foto abierta y se perderán. ¿Cerrar el editor igualmente?'
+    : '¿Cerrar el editor?';
+  if (!confirm(q)) return;
+  await fetch('/api/shutdown', { method: 'POST', body: '{}' }).catch(() => {});
+  window.onbeforeunload = null; state.dirty = false;
+  document.body.innerHTML = '<div style="display:grid;place-items:center;height:100vh;text-align:center;padding:24px">' +
+    '<div><h2>Editor 360 cerrado</h2><p style="color:var(--muted)">Ya puedes cerrar esta pestaña. ' +
+    'Para volver a usarlo, ábrelo de nuevo desde su acceso directo.</p></div></div>';
+};
 
 // ---------- Ajustes de IA ----------
 // Primer arranque (ninguna IA lista): el mismo diálogo se abre en modo bienvenida.

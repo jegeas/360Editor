@@ -25,7 +25,21 @@ Los servicios de pago cobran cada edición a **tu cuenta**: necesitan facturaci�
 
 Puedes configurar varias IA a la vez y elegir cuál usar en cada edición desde el panel de edición.
 
-## Requisitos
+## Instalar en Windows (recomendado)
+
+1. Entra en la página de [versiones (Releases)](https://github.com/jegeas/360Editor/releases) y descarga **`Instalar-Editor-360-x.y.z.exe`**.
+2. Ábrelo y sigue los pasos. No hace falta tener Python ni permisos de administrador.
+3. Abre **Editor 360** desde el escritorio o el menú Inicio. Se abrirá en tu navegador. Para cerrarlo, usa el botón **Cerrar editor**.
+
+> La primera vez, Windows puede mostrar «Windows protegió su PC», porque el instalador no tiene firma digital. Pulsa **Más información → Ejecutar de todas formas**.
+
+Tus claves y el modelo local se guardan en `%APPDATA%\Editor 360`. Al desinstalar, el instalador pregunta si quieres borrarlos también.
+
+## Ejecutar desde el código
+
+Si prefieres no instalarlo, o quieres modificarlo:
+
+### Requisitos
 
 - Python 3.10 o superior
 - **Google Chrome o Microsoft Edge** para poder sobrescribir archivos. En otros navegadores el editor funciona, pero guardar descarga una copia.
@@ -34,7 +48,7 @@ Puedes configurar varias IA a la vez y elegir cuál usar en cada edición desde 
 pip install -r requirements.txt
 ```
 
-## Puesta en marcha
+### Puesta en marcha
 
 1. Arranca el editor:
 
@@ -86,12 +100,30 @@ Si la máscara toca el borde del recuadro, el editor avisa: lo que quede fuera d
 
 Las fotos no se suben a internet salvo el recorte que se envía a la IA elegida (ninguno en modo local): el editor funciona en tu ordenador (`localhost`) y es tu navegador quien lee y escribe los archivos.
 
+## Publicar una versión nueva
+
+El instalador se fabrica automáticamente en GitHub (`.github/workflows/instalador.yml`):
+
+1. Cambia `VERSION` en `paths.py` (por ejemplo, `1.1.0`) y súbelo.
+2. Crea y sube la etiqueta de esa versión:
+
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+
+3. GitHub construye el instalador, lo prueba y lo publica en *Releases*. Tarda unos 10 minutos.
+
+Cada vez que subes cambios del programa a `main`, también se construye y se prueba, y el instalador queda en la pestaña *Actions* sin publicarse.
+
 ## Estructura
 
 ```
 server.py      Servidor local, reproyección 360 y fusión del resultado
 providers.py   Proveedores de IA (Gemini, OpenAI, Stability, Replicate, LaMa local)
+paths.py       Versión y rutas de datos (carpeta del proyecto o %APPDATA% si está instalado)
 index.html     Interfaz del editor
+installer/     Icono, script de Inno Setup y build.ps1 para fabricar el instalador
 config.json    Tus claves y preferencias (se crea solo; no se sube a git)
 modelos/       Modelo local, si lo descargas (no se sube a git)
 ```

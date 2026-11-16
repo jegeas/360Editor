@@ -20,13 +20,12 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
+
 
 import numpy as np
 from PIL import Image
 
-HERE = Path(__file__).resolve().parent
-MODELS_DIR = HERE / "modelos"
+from paths import FROZEN, MODELS_DIR
 
 
 class ProviderError(RuntimeError):
@@ -402,6 +401,8 @@ class LocalLama(Provider):
     def _install(self):
         try:
             if not self.runtime_ok():
+                if FROZEN:      # en el ejecutable ya viene incluido; pip no está disponible
+                    raise RuntimeError("Falta onnxruntime en esta instalación. Reinstala el Editor 360.")
                 self.job["step"] = "Instalando onnxruntime…"
                 r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
                                     "onnxruntime"], capture_output=True, text=True)
@@ -414,7 +415,7 @@ class LocalLama(Provider):
             self.job.update(running=False, error=str(e), step="Error")
 
     def _download(self):
-        MODELS_DIR.mkdir(exist_ok=True)
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
         part = LAMA_FILE.with_suffix(".part")
         self.job["step"] = "Descargando el modelo LaMa…"
         req = urllib.request.Request(LAMA_URL, headers={"User-Agent": "editor-360"})
