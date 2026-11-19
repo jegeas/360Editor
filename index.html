@@ -6,8 +6,9 @@
 <meta name="editor-version" content="1.1.0">
 <link rel="icon" href="/favicon.ico">
 <title>Editor 360 IA</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
-<script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+<!-- Visor 360: Pannellum 2.5.6 (MIT), incluido en vendor/ para no depender de internet -->
+<link rel="stylesheet" href="/vendor/pannellum/pannellum.css">
+<script src="/vendor/pannellum/pannellum.js"></script>
 <style>
   :root {
     --bg: #141416; --panel: #1e1f23; --line: #33353b; --text: #ececf0; --muted: #9a9ca5;
@@ -26,7 +27,7 @@
     background: #121315; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
   textarea { width: 100%; resize: vertical; min-height: 64px; }
 
-  .app { display: grid; grid-template-rows: auto auto 1fr; height: 100%; }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
   header { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
   header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: .2px; }
   header .spacer { flex: 1; }
@@ -109,8 +110,9 @@
   .progress { height: 8px; background: #121315; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 8px 0; }
   .progress div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   #aiSelect { width: 100%; }
-  .version-warn { background: rgba(224,100,100,.15); color: #f3b0b0; border-bottom: 1px solid rgba(224,100,100,.4);
-    padding: 10px 14px; font-size: 14px; }
+  /* Superpuesta en la parte alta del visor: no altera la rejilla de la página */
+  .version-warn { position: absolute; top: 0; left: 0; right: 0; z-index: 30; background: #3a1d1f; color: #f3b0b0;
+    border-bottom: 1px solid rgba(224,100,100,.5); padding: 10px 14px; font-size: 14px; }
   .version-warn b { color: #fff; }
   .toast { position: fixed; right: 16px; bottom: 16px; z-index: 99; max-width: 420px; }
 
@@ -134,8 +136,8 @@
     <button id="settingsBtn">Ajustes</button>
     <button id="quitBtn" title="Cierra el editor (el programa deja de ejecutarse)">Cerrar editor</button>
   </header>
-  <div class="version-warn" id="versionWarn" hidden></div>
   <div class="stage" id="stage">
+    <div class="version-warn" id="versionWarn" hidden></div>
     <div id="pano"></div>
     <div class="empty" id="empty">Pulsa «Abrir foto…» para buscar en tu ordenador la foto 360 que quieres editar,
 o arrástrala aquí.</div>

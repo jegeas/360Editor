@@ -117,6 +117,11 @@ El instalador se fabrica automáticamente en GitHub (`.github/workflows/instalad
 
 Cada vez que subes cambios del programa a `main`, también se construye y se prueba, y el instalador queda en la pestaña *Actions* sin publicarse.
 
+## Licencias de terceros
+
+- [Pannellum](https://pannellum.org/) 2.5.6, visor 360, © Matthew Petroff, licencia MIT (`vendor/pannellum/LICENSE`).
+- Modelo [LaMa](https://github.com/advimman/lama) en ONNX ([Carve/LaMa-ONNX](https://huggingface.co/Carve/LaMa-ONNX)), licencia Apache-2.0. Solo se descarga si el usuario elige el modo local.
+
 ## Estructura
 
 ```
@@ -124,6 +129,7 @@ server.py      Servidor local, reproyección 360 y fusión del resultado
 providers.py   Proveedores de IA (Gemini, OpenAI, Stability, Replicate, LaMa local)
 paths.py       Versión y rutas de datos (carpeta del proyecto o %APPDATA% si está instalado)
 index.html     Interfaz del editor
+vendor/        Visor Pannellum incluido (sin depender de internet)
 installer/     Icono, script de Inno Setup y build.ps1 para fabricar el instalador
 config.json    Tus claves y preferencias (se crea solo; no se sube a git)
 modelos/       Modelo local, si lo descargas (no se sube a git)

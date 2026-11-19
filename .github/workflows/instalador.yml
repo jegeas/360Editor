@@ -16,6 +16,7 @@ on:
       - "providers.py"
       - "paths.py"
       - "index.html"
+      - "vendor/**"
       - "requirements.txt"
       - "installer/**"
       - ".github/workflows/instalador.yml"
@@ -67,6 +68,8 @@ jobs:
           if (-not $state) { Get-Content "$env:APPDATA\Editor 360\editor.log" -ErrorAction SilentlyContinue; throw "El editor no ha arrancado" }
           $page = Invoke-WebRequest http://127.0.0.1:8399/ -UseBasicParsing
           if ($page.Content -notmatch "Editor 360") { throw "La página del editor no se sirve" }
+          $js = Invoke-WebRequest http://127.0.0.1:8399/vendor/pannellum/pannellum.js -UseBasicParsing
+          if ($js.Content -notmatch "Pannellum 2.5.6") { throw "El visor Pannellum no va incluido en el ejecutable" }
           $local = $state.providers | Where-Object { $_.id -eq "local" }
           if (-not $local.local.runtime) { throw "onnxruntime no está incluido en el ejecutable" }
           "Versión $($state.app), frozen=$($state.frozen), proveedores: $(($state.providers.id) -join ', ')"

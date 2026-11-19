@@ -20,6 +20,7 @@ python -m PyInstaller --noconfirm --clean --windowed `
     --name "Editor 360" `
     --icon installer\icon.ico `
     --add-data "index.html;." `
+    --add-data "vendor;vendor" `
     --add-data "installer\icon.ico;." `
     --collect-all onnxruntime `
     --exclude-module tkinter `

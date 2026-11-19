@@ -417,6 +417,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self.send(200, (RESOURCES / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if u.path.startswith("/vendor/"):
+                # Librerías incluidas con el editor (visor Pannellum): funciona sin internet
+                base = (RESOURCES / "vendor").resolve()
+                f = (RESOURCES / unquote(u.path.lstrip("/"))).resolve()
+                if base in f.parents and f.is_file():
+                    ctype = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}.get(
+                        f.suffix.lower(), "application/octet-stream")
+                    return self.send(200, f.read_bytes(), ctype, {"Cache-Control": "max-age=86400"})
+                return self.send(404, {"error": "No encontrado"})
             if u.path == "/favicon.ico":
                 # Icono de la pestaña: junto al programa (instalado) o en installer/ (código)
                 for ico in (RESOURCES / "icon.ico", RESOURCES / "installer" / "icon.ico"):
