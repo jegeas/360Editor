@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Editor 360"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 FROZEN = getattr(sys, "frozen", False)          # True dentro del ejecutable de PyInstaller
 
