@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="editor-version" content="1.1.0">
 <title>Editor 360 IA</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
 <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
@@ -24,7 +25,7 @@
     background: #121315; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
   textarea { width: 100%; resize: vertical; min-height: 64px; }
 
-  .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  .app { display: grid; grid-template-rows: auto auto 1fr; height: 100%; }
   header { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
   header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: .2px; }
   header .spacer { flex: 1; }
@@ -107,6 +108,9 @@
   .progress { height: 8px; background: #121315; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 8px 0; }
   .progress div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   #aiSelect { width: 100%; }
+  .version-warn { background: rgba(224,100,100,.15); color: #f3b0b0; border-bottom: 1px solid rgba(224,100,100,.4);
+    padding: 10px 14px; font-size: 14px; }
+  .version-warn b { color: #fff; }
   .toast { position: fixed; right: 16px; bottom: 16px; z-index: 99; max-width: 420px; }
 
   @media (max-width: 800px) {
@@ -129,6 +133,7 @@
     <button id="settingsBtn">Ajustes</button>
     <button id="quitBtn" title="Cierra el editor (el programa deja de ejecutarse)">Cerrar editor</button>
   </header>
+  <div class="version-warn" id="versionWarn" hidden></div>
   <div class="stage" id="stage">
     <div id="pano"></div>
     <div class="empty" id="empty">Pulsa «Abrir foto…» para buscar en tu ordenador la foto 360 que quieres editar,
@@ -297,8 +302,21 @@ function toast(text, kind = 'ok') {
 function sideMsg(text, kind = 'err') { const m = $('sideMsg'); m.className = text ? 'msg ' + kind : 'msg'; m.textContent = text || ''; }
 function busy(el, on, text) { $(el).classList.toggle('on', on); if (text) $(el + 'Text').textContent = text; }
 
+// Si se actualiza el editor con una versión anterior aún en marcha, la página (que se lee
+// del disco) es nueva pero el servidor es el viejo y no entiende las funciones nuevas.
+const PAGE_VERSION = document.querySelector('meta[name="editor-version"]').content;
+let versionMismatch = false;
+function checkVersion() {
+  versionMismatch = state.app !== PAGE_VERSION;
+  const w = $('versionWarn');
+  w.hidden = !versionMismatch;
+  if (versionMismatch) w.innerHTML = `El editor se ha actualizado a la versión <b>${PAGE_VERSION}</b>, pero sigue en marcha la versión ` +
+    `<b>${state.app || 'anterior'}</b> y algunas funciones no harán lo que esperas. Pulsa <b>Cerrar editor</b> y vuelve a abrirlo.`;
+}
+
 async function refresh() {
   state = await api('/api/state');
+  checkVersion();
   $('fileName').textContent = state.name || '';
   $('fileName').title = state.name || '';
   $('undoBtn').disabled = !state.undo;
@@ -709,7 +727,7 @@ function updateAddUi() {
   $('modeHint').textContent = !add ? 'Pinta encima de lo que quieres quitar, cubriéndolo con algo de margen.'
     : !img && !aiCanAddText() ? 'Con esta IA no se puede añadir a partir de texto: inserta una imagen para pegarla, o elige otra IA.'
     : !img ? 'Pinta la zona donde debe aparecer el objeto, del tamaño aproximado que tendría. O inserta una imagen.'
-    : placeMode === 'paste' ? 'Coloca la imagen. Se pegará exactamente como se ve, sin IA.'
+    : placeMode === 'paste' ? 'Coloca la imagen. Se pegará exactamente como se ve, sin IA. Lo que pintes con el pincel no se usa en este modo.'
     : 'Coloca la imagen. La IA ajustará su luz y añadirá sombras. Si quieres, pinta también dónde debe caer la sombra.';
   const ai = currentAi(), canAi = !!ai && ai.canIntegrate;
   const aiBtn = document.querySelector('#placeSeg [data-place="ai"]');
@@ -891,6 +909,7 @@ function setResult(r) {
 }
 
 async function generate() {
+  if (versionMismatch) return sideMsg('Está en marcha una versión anterior del editor. Pulsa «Cerrar editor» y vuelve a abrirlo antes de seguir.');
   const withImg = mode === 'add' && !!ov, paste = withImg && placeMode === 'paste';
   if (mode === 'add' && !withImg && !aiCanAddText()) {
     const p0 = currentAi();

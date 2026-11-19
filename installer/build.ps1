@@ -11,6 +11,10 @@ Set-Location (Split-Path -Parent $PSScriptRoot)      # raíz del repositorio
 if (-not $Version) { $Version = (python -c "import paths; print(paths.VERSION)").Trim() }
 Write-Host "Editor 360 $Version"
 
+# La página lleva su versión (meta editor-version) para detectar un servidor antiguo en marcha
+$page = [regex]::Match((Get-Content index.html -Raw -Encoding UTF8), 'name="editor-version" content="([^"]+)"').Groups[1].Value
+if ($page -ne $Version) { throw "index.html dice editor-version=$page pero la versión es $Version. Actualiza la etiqueta meta." }
+
 # 1. Ejecutable: Python + editor + numpy, Pillow y onnxruntime (para el modo local)
 python -m PyInstaller --noconfirm --clean --windowed `
     --name "Editor 360" `
