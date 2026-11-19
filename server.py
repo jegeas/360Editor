@@ -417,6 +417,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self.send(200, (RESOURCES / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if u.path == "/favicon.ico":
+                # Icono de la pestaña: junto al programa (instalado) o en installer/ (código)
+                for ico in (RESOURCES / "icon.ico", RESOURCES / "installer" / "icon.ico"):
+                    if ico.exists():
+                        return self.send(200, ico.read_bytes(), "image/x-icon")
+                return self.send(204, b"", "image/x-icon")
             if u.path == "/api/state":
                 active, providers = providers_state()
                 return self.send(200, {
