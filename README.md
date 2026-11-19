@@ -92,6 +92,7 @@ El modo local borra objetos con [LaMa](https://github.com/advimman/lama) en tu p
 | Abrir | Pulsa **Abrir foto…** (`Ctrl+O`) y busca la foto en tu ordenador, o arrástrala sobre el visor. |
 | Encuadrar | Gira y haz zoom hasta que el objeto quede **entero** dentro del recuadro blanco. Cuanto más cerca, más detalle. |
 | Editar | Pulsa **Editar esta vista**, elige la IA, *Quitar* o *Añadir*, pinta la máscara (teclas `[` y `]` para el tamaño del pincel, `e` para la goma) y escribe qué quitar o añadir. |
+| Insertar imagen | En *Añadir*, pulsa **Insertar imagen…** (o arrastra una imagen sobre la vista, o pégala con `Ctrl+V`). Muévela arrastrándola y cambia su tamaño tirando de las esquinas o con el deslizador. Elige **Integrar con IA** (Gemini u OpenAI ajustan luz, color y sombras sin cambiar el objeto) o **Pegar tal cual** (instantáneo, gratis y sin IA). Un PNG con fondo transparente da el mejor resultado. |
 | Revisar | Mantén pulsado *Ver el original* para comparar. Pide *Otra variante*, o prueba con otra IA, si no te convence. |
 | Aplicar | **Aplicar a la panorámica** la fusiona a resolución completa. **Deshacer** revierte las últimas 15 ediciones. |
 | Guardar | **Guardar…** (`Ctrl+S`) ofrece dos opciones: **Sobrescribir** el archivo que estás editando, o **Guardar como…** con otro nombre y carpeta. Después de *Guardar como*, sigues trabajando sobre el archivo nuevo. |

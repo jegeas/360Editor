@@ -110,6 +110,16 @@ def instruction(mode, text, mask_desc):
         "position, perspective, lens and composition. Do not crop, zoom, shift, recolor or restyle "
         "anything outside the editable area. "
     )
+    if mode == "integrate":
+        what = f" ({text.strip()})" if text.strip() else ""
+        return common + (
+            f"Task: the editable area contains an object{what} that was pasted onto the photo. Make it look "
+            "like it was really photographed in this place: adapt its lighting, shading, color temperature, "
+            "sharpness, noise and grain to the scene, and add realistic contact shadows and reflections on "
+            "the nearby surfaces. Keep the object exactly where it is, with the same size, outline, design, "
+            "colors, text and details. Do not replace it with a different object and do not change anything "
+            "else."
+        )
     if mode == "remove":
         what = text.strip() or "the object(s)"
         return common + (
@@ -142,6 +152,7 @@ class Provider:
     label = ""
     needs_key = True
     can_add = True
+    can_integrate = False   # sabe integrar una imagen pegada (luz y sombras) sin redibujarla
     env = ""                # variable de entorno con la clave
     key_url = ""            # dónde se consigue la clave
     billing_url = ""
@@ -151,6 +162,7 @@ class Provider:
 
     def describe(self):
         return {"id": self.id, "label": self.label, "needsKey": self.needs_key, "canAdd": self.can_add,
+                "canIntegrate": self.can_integrate,
                 "keyUrl": self.key_url, "env": self.env, "defaultModel": self.default_model,
                 "models": self.models, "note": self.note}
 
@@ -163,6 +175,7 @@ class Provider:
 
 class Gemini(Provider):
     id, label = "gemini", "Google Gemini"
+    can_integrate = True
     env = "GEMINI_API_KEY"
     key_url = "https://aistudio.google.com/apikey"
     billing_url = "https://ai.studio/projects"
@@ -220,6 +233,7 @@ class Gemini(Provider):
 
 class OpenAI(Provider):
     id, label = "openai", "OpenAI"
+    can_integrate = True
     env = "OPENAI_API_KEY"
     key_url = "https://platform.openai.com/api-keys"
     billing_url = "https://platform.openai.com/settings/organization/billing"

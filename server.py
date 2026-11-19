@@ -260,6 +260,23 @@ def mask_from_png(data_url, n):
     return m.point(lambda p: 255 if p > 20 else 0)
 
 
+def place_overlay(ov, n):
+    """Coloca la imagen insertada por el usuario en la vista n x n.
+    ov = {"image": dataURL, "x", "y", "w", "h"} en fracciones del recuadro (0..1).
+    Devuelve (rgb float n x n x 3, alfa float n x n 0..1)."""
+    raw = base64.b64decode(ov["image"].split(",", 1)[1])
+    img = Image.open(io.BytesIO(raw)).convert("RGBA")
+    x, y = float(ov["x"]) * n, float(ov["y"]) * n
+    w, h = max(1, round(float(ov["w"]) * n)), max(1, round(float(ov["h"]) * n))
+    if w > 4 * n or h > 4 * n:
+        raise ValueError("La imagen insertada es demasiado grande para el recuadro")
+    img = img.resize((w, h), Image.LANCZOS)
+    layer = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    layer.paste(img, (round(x), round(y)), img)        # recorta sola lo que queda fuera
+    a = np.asarray(layer, dtype=np.float32)
+    return a[..., :3], a[..., 3] / 255.0
+
+
 def feather(mask_l, n, grow):
     """Máscara binaria -> alpha suave (float 0..1)."""
     m = mask_l
@@ -517,33 +534,63 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/edit":
                 mode = b.get("mode", "remove")
                 text = b.get("prompt", "")
+                overlay = b.get("overlay") if mode == "add" else None
+                place = b.get("place", "ai")            # con imagen: "ai" (integrar) o "paste"
                 cfg = read_config_file()
                 pid = b.get("provider") or cfg["provider"]
                 if pid not in PROVIDERS:
                     return self.send(400, {"error": "Proveedor desconocido"})
                 prov = PROVIDERS[pid]
-                if not provider_ready(pid, cfg):
-                    return self.send(400, {"error": f"{prov.label} no está configurado. Hazlo en Ajustes."})
-                if mode == "add" and not prov.can_add:
-                    return self.send(400, {"error": f"{prov.label} solo puede quitar elementos. "
-                                                    "Elige otra IA para añadir."})
-                if mode == "add" and not text.strip():
-                    return self.send(400, {"error": "Describe qué quieres añadir"})
+                needs_ai = not (overlay and place == "paste")
+                if needs_ai:
+                    if not provider_ready(pid, cfg):
+                        return self.send(400, {"error": f"{prov.label} no está configurado. Hazlo en Ajustes."})
+                    if mode == "add" and not prov.can_add:
+                        return self.send(400, {"error": f"{prov.label} solo puede quitar elementos. "
+                                                        "Elige otra IA para añadir."})
+                    if overlay and not prov.can_integrate:
+                        return self.send(400, {"error": f"{prov.label} no sabe integrar una imagen. Usa Gemini "
+                                                        "u OpenAI, o elige «Pegar tal cual»."})
+                    if mode == "add" and not overlay and not text.strip():
+                        return self.send(400, {"error": "Describe qué quieres añadir o inserta una imagen"})
                 yaw, pitch, fov = (math.radians(float(b[k])) for k in ("yaw", "pitch", "fov"))
                 fov = float(np.clip(fov, math.radians(15), math.radians(110)))
                 with S.lock:
                     n = crop_size(fov)
                     view = render_view(S.eq, yaw, pitch, fov, n)
                 mask = mask_from_png(b["mask"], n)
-                if not np.asarray(mask).any():
-                    return self.send(400, {"error": "Pinta la zona a editar"})
+                viewf = view.astype(np.float32)
                 t0 = time.time()
-                ai = prov.edit(provider_key(pid, cfg)[0], provider_model(pid, cfg),
-                               Image.fromarray(view), mask, mode, text)
-                ai = np.asarray(ai.convert("RGB").resize((n, n), Image.LANCZOS), dtype=np.float32)
-                alpha = feather(mask, n, grow=(mode == "remove"))
-                ai = color_match(ai, view, alpha)
-                comp = view.astype(np.float32) + (ai - view.astype(np.float32)) * alpha[..., None]
+
+                if overlay:
+                    ov_rgb, ov_a = place_overlay(overlay, n)
+                    if ov_a.max() < 0.05:
+                        return self.send(400, {"error": "La imagen insertada está fuera del recuadro"})
+                    base = viewf + (ov_rgb - viewf) * ov_a[..., None]
+                    if place == "paste":
+                        # Sin IA: la imagen tal cual, con su transparencia
+                        result, alpha = base, ov_a
+                    else:
+                        # Integrar: la IA retoca la imagen pegada y su entorno (sombras, reflejos)
+                        k = max(3, (n // 40) | 1)
+                        around = Image.fromarray(((ov_a > 0.05) * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(k))
+                        mask = Image.fromarray(np.maximum(np.asarray(around), np.asarray(mask)))
+                        ai = prov.edit(provider_key(pid, cfg)[0], provider_model(pid, cfg),
+                                       Image.fromarray(np.clip(base + 0.5, 0, 255).astype(np.uint8)),
+                                       mask, "integrate", text)
+                        ai = np.asarray(ai.convert("RGB").resize((n, n), Image.LANCZOS), dtype=np.float32)
+                        alpha = feather(mask, n, grow=False)
+                        result = color_match(ai, view, alpha)
+                else:
+                    if not np.asarray(mask).any():
+                        return self.send(400, {"error": "Pinta la zona a editar"})
+                    ai = prov.edit(provider_key(pid, cfg)[0], provider_model(pid, cfg),
+                                   Image.fromarray(view), mask, mode, text)
+                    ai = np.asarray(ai.convert("RGB").resize((n, n), Image.LANCZOS), dtype=np.float32)
+                    alpha = feather(mask, n, grow=(mode == "remove"))
+                    result = color_match(ai, view, alpha)
+
+                comp = viewf + (np.asarray(result, dtype=np.float32) - viewf) * alpha[..., None]
                 comp = np.clip(comp + 0.5, 0, 255).astype(np.uint8)
                 rid = uuid.uuid4().hex[:10]
                 with S.lock:

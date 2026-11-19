@@ -54,6 +54,16 @@
   .canvas-box { position: relative; touch-action: none; }
   .canvas-box canvas, .canvas-box img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 4px; }
   #maskCanvas { opacity: .5; cursor: none; }
+  /* Imagen insertada en «Añadir»: se arrastra y se redimensiona desde las esquinas */
+  #ovl { position: absolute; z-index: 3; cursor: move; touch-action: none; outline: 1.5px dashed var(--accent); outline-offset: 0; }
+  #ovl img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+  #ovl .h { position: absolute; width: 16px; height: 16px; background: #fff; border: 2px solid var(--accent); border-radius: 4px; z-index: 1; }
+  #ovl .nw { left: -9px; top: -9px; cursor: nwse-resize; } #ovl .ne { right: -9px; top: -9px; cursor: nesw-resize; }
+  #ovl .sw { left: -9px; bottom: -9px; cursor: nesw-resize; } #ovl .se { right: -9px; bottom: -9px; cursor: nwse-resize; }
+  .canvas-box.showing-result #ovl { display: none; }
+  .canvas-box.drop-img::after { content: "Suelta aquí la imagen"; position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(20,20,22,.75); border: 2px dashed var(--accent); border-radius: 6px; z-index: 5; font-size: 16px; }
+  .seg button:disabled { opacity: .4; }
   #resultImg { display: none; }
   .canvas-box.showing-result #resultImg { display: block; }
   .canvas-box.showing-result #maskCanvas { display: none; }
@@ -136,6 +146,7 @@ o arrástrala aquí.</div>
     <div class="canvas-box" id="canvasBox">
       <img id="cropImg" alt="">
       <canvas id="maskCanvas"></canvas>
+      <div id="ovl" hidden><img id="ovlImg" alt=""><span class="h nw" data-h="nw"></span><span class="h ne" data-h="ne"></span><span class="h sw" data-h="sw"></span><span class="h se" data-h="se"></span></div>
       <img id="resultImg" alt="">
       <div id="cursor"></div>
     </div>
@@ -156,6 +167,24 @@ o arrástrala aquí.</div>
       <div style="margin-top:12px">
         <label class="small" id="promptLabel" for="prompt">Qué quitar (opcional)</label>
         <textarea id="prompt" placeholder="p. ej. el cubo amarillo y su sombra"></textarea>
+      </div>
+      <div id="imageBox" style="margin-top:12px" hidden>
+        <label class="small">Imagen (opcional)</label>
+        <div class="row">
+          <button id="insertImgBtn" title="También puedes arrastrarla sobre la vista o pegarla con Ctrl+V">Insertar imagen…</button>
+          <button id="removeImgBtn" class="danger" hidden>Quitar imagen</button>
+        </div>
+        <input type="file" id="imgInput" accept="image/png,image/jpeg,image/webp" hidden>
+        <div id="imgControls" hidden>
+          <label class="small" style="margin-top:10px">Tamaño: <span id="imgSizeVal">40</span> % del recuadro</label>
+          <input type="range" id="imgSize" min="3" max="150" value="40" style="width:100%">
+          <div class="seg" id="placeSeg" style="margin-top:8px">
+            <button data-place="ai" class="on">Integrar con IA</button>
+            <button data-place="paste">Pegar tal cual</button>
+          </div>
+          <p class="hint" id="placeHint"></p>
+        </div>
+        <p class="hint" id="imgTip">Un PNG con fondo transparente da el mejor resultado. Arrastra la imagen para moverla y tira de sus esquinas para cambiar el tamaño.</p>
       </div>
       <div style="margin-top:12px">
         <label class="small">Pincel: <span id="brushVal">60</span> px · teclas [ y ]</label>
@@ -248,6 +277,7 @@ o arrástrala aquí.</div>
 <script>
 const $ = (id) => document.getElementById(id);
 let state = null, viewer = null, mode = 'remove', erasing = false, brush = 60;
+let ov = null, placeMode = 'ai';   // imagen insertada en «Añadir» y cómo se coloca
 let crop = null;      // {yaw, pitch, fov}
 let resultId = null;
 const MASK_RES = 1024;
@@ -631,14 +661,14 @@ function renderAiSelect() {
 }
 function currentAi() { return prov($('aiSelect').value); }
 function updateModeAvailability() {
-  const p = currentAi(), addBtn = document.querySelector('#modeSeg [data-mode="add"]');
-  $('aiNote').textContent = p ? p.note : 'No hay ninguna IA configurada. Hazlo en Ajustes.';
+  // «Añadir» siempre está disponible: aunque la IA no sepa añadir (o no haya IA),
+  // se puede insertar una imagen y pegarla tal cual.
+  const p = currentAi();
+  $('aiNote').textContent = p ? p.note : 'No hay ninguna IA configurada. Hazlo en Ajustes. Puedes pegar imágenes sin IA.';
   if (p && p.id === 'local') api('/api/local/warmup', {}).catch(() => {});   // adelanta la carga del modelo
-  addBtn.disabled = !!p && !p.canAdd;
-  addBtn.title = addBtn.disabled ? `${p.label} solo puede quitar elementos` : '';
-  if (addBtn.disabled && mode === 'add') document.querySelector('#modeSeg [data-mode="remove"]').click();
 }
-$('aiSelect').onchange = updateModeAvailability;
+const aiCanAddText = () => { const p = currentAi(); return !!p && p.canAdd; };
+$('aiSelect').onchange = () => { updateModeAvailability(); updateAddUi(); };
 
 // ---------- Editor de vista ----------
 const mask = $('maskCanvas'), mctx = mask.getContext('2d');
@@ -649,7 +679,7 @@ $('editViewBtn').onclick = () => {
   crop = { yaw: viewer.getYaw(), pitch: viewer.getPitch(), fov };
   $('cropImg').src = `/api/crop?yaw=${crop.yaw}&pitch=${crop.pitch}&fov=${fov}&v=${state.version}`;
   mctx.clearRect(0, 0, MASK_RES, MASK_RES);
-  setResult(null); sideMsg(''); edgeAck = ''; $('generateBtn').textContent = 'Generar con IA';
+  setResult(null); sideMsg(''); edgeAck = ''; ov = null; updateAddUi();
   $('modal').classList.add('open');
   fitCanvas();
 };
@@ -664,12 +694,35 @@ function fitCanvas() {
 document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => {
   mode = b.dataset.mode;
   document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x === b));
-  $('promptLabel').textContent = mode === 'remove' ? 'Qué quitar (opcional)' : 'Qué añadir';
-  $('prompt').placeholder = mode === 'remove' ? 'p. ej. el cubo amarillo y su sombra' : 'p. ej. un banco de madera antiguo apoyado en la pared';
-  $('modeHint').textContent = mode === 'remove'
-    ? 'Pinta encima de lo que quieres quitar, cubriéndolo con algo de margen.'
-    : 'Pinta la zona donde debe aparecer el objeto, del tamaño aproximado que tendría.';
+  updateAddUi();
 });
+
+// Textos y controles que dependen del modo y de si hay una imagen insertada
+function updateAddUi() {
+  const add = mode === 'add', img = add && !!ov;
+  $('imageBox').hidden = !add;
+  $('imgControls').hidden = $('removeImgBtn').hidden = !ov;
+  $('insertImgBtn').textContent = ov ? 'Cambiar imagen…' : 'Insertar imagen…';
+  $('promptLabel').textContent = !add ? 'Qué quitar (opcional)' : img ? 'Qué es la imagen (opcional)' : 'Qué añadir';
+  $('prompt').placeholder = !add ? 'p. ej. el cubo amarillo y su sombra'
+    : img ? 'p. ej. una escultura de bronce' : 'p. ej. un banco de madera antiguo apoyado en la pared';
+  $('modeHint').textContent = !add ? 'Pinta encima de lo que quieres quitar, cubriéndolo con algo de margen.'
+    : !img && !aiCanAddText() ? 'Con esta IA no se puede añadir a partir de texto: inserta una imagen para pegarla, o elige otra IA.'
+    : !img ? 'Pinta la zona donde debe aparecer el objeto, del tamaño aproximado que tendría. O inserta una imagen.'
+    : placeMode === 'paste' ? 'Coloca la imagen. Se pegará exactamente como se ve, sin IA.'
+    : 'Coloca la imagen. La IA ajustará su luz y añadirá sombras. Si quieres, pinta también dónde debe caer la sombra.';
+  const ai = currentAi(), canAi = !!ai && ai.canIntegrate;
+  const aiBtn = document.querySelector('#placeSeg [data-place="ai"]');
+  aiBtn.disabled = !canAi;
+  if (!canAi && placeMode === 'ai') placeMode = 'paste';
+  document.querySelectorAll('#placeSeg button').forEach(x => x.classList.toggle('on', x.dataset.place === placeMode));
+  $('placeHint').textContent = placeMode === 'paste'
+    ? 'Gratis e instantáneo: la imagen se pega tal cual, con su transparencia.'
+    : `${ai.label} ajustará luz, color y sombras sin cambiar el objeto.`;
+  if (!canAi) $('placeHint').textContent += ' Para integrarla con IA, elige Gemini u OpenAI en el selector de IA.';
+  $('generateBtn').textContent = img && placeMode === 'paste' ? 'Pegar imagen' : 'Generar con IA';
+  renderOverlay();
+}
 
 $('brush').oninput = (e) => { brush = +e.target.value; $('brushVal').textContent = brush; };
 $('eraserBtn').onclick = () => { erasing = !erasing; $('eraserBtn').classList.toggle('primary', erasing); };
@@ -748,16 +801,104 @@ function updateEdgeWarning() {
   $('generateBtn').textContent = edges.length && edgeAck === edges.join() ? 'Generar de todas formas' : 'Generar con IA';
 }
 
+// ---------- Imagen insertada (modo Añadir) ----------
+// ov = { src: dataURL PNG, ar: alto/ancho, x, y, w } en fracciones del recuadro (0..1)
+const MAX_IMG = 2048;
+
+function renderOverlay() {
+  const el = $('ovl');
+  el.hidden = !(ov && mode === 'add');
+  if (el.hidden) return;
+  if ($('ovlImg').src !== ov.src) $('ovlImg').src = ov.src;
+  Object.assign(el.style, { left: ov.x * 100 + '%', top: ov.y * 100 + '%', width: ov.w * 100 + '%', height: ov.w * ov.ar * 100 + '%' });
+  $('imgSize').value = Math.round(ov.w * 100); $('imgSizeVal').textContent = Math.round(ov.w * 100);
+}
+
+async function insertImage(file) {
+  if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return sideMsg('Usa una imagen PNG, JPG o WebP.');
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, MAX_IMG / Math.max(bmp.width, bmp.height));   // se reduce si es enorme
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const ar = c.height / c.width, w = Math.min(0.4, 0.6 / ar);
+    ov = { src: c.toDataURL('image/png'), ar, w, x: (1 - w) / 2, y: (1 - w * ar) / 2 };
+    if (mode !== 'add') document.querySelector('#modeSeg [data-mode="add"]').click();
+    sideMsg(''); updateAddUi();
+  } catch (e) { sideMsg('No se pudo leer la imagen: ' + e.message); }
+}
+$('insertImgBtn').onclick = () => $('imgInput').click();
+$('imgInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; insertImage(f); };
+$('removeImgBtn').onclick = () => { ov = null; updateAddUi(); };
+document.querySelectorAll('#placeSeg button').forEach(b => b.onclick = () => { placeMode = b.dataset.place; updateAddUi(); });
+
+// Tamaño con el deslizador: mantiene el centro
+$('imgSize').oninput = (e) => {
+  if (!ov) return;
+  const cx = ov.x + ov.w / 2, cy = ov.y + ov.w * ov.ar / 2;
+  ov.w = +e.target.value / 100; ov.x = cx - ov.w / 2; ov.y = cy - ov.w * ov.ar / 2;
+  renderOverlay();
+};
+
+// Arrastrar para mover; esquinas para redimensionar sin deformar
+let ovDrag = null;
+$('ovl').addEventListener('pointerdown', (e) => {
+  if (resultId || !ov) return;
+  e.preventDefault(); e.stopPropagation();
+  $('ovl').setPointerCapture(e.pointerId);
+  const r = $('canvasBox').getBoundingClientRect();
+  ovDrag = { h: e.target.dataset.h || null, sx: e.clientX, sy: e.clientY, rw: r.width, rh: r.height, ...ov };
+});
+$('ovl').addEventListener('pointermove', (e) => {
+  if (!ovDrag) return;
+  const d = ovDrag, dx = (e.clientX - d.sx) / d.rw, dy = (e.clientY - d.sy) / d.rh;
+  if (!d.h) { ov.x = d.x + dx; ov.y = d.y + dy; }
+  else {
+    const right = d.h.includes('e'), bottom = d.h.includes('s');
+    // El tamaño sigue al ratón por el lado que más se mueve, manteniendo la proporción
+    const byW = (right ? dx : -dx), byH = (bottom ? dy : -dy) / d.ar;
+    const w = Math.max(0.02, d.w + (Math.abs(byW) > Math.abs(byH) ? byW : byH));
+    ov.w = w;
+    ov.x = right ? d.x : d.x + d.w - w;
+    ov.y = bottom ? d.y : d.y + d.w * d.ar - w * d.ar;
+  }
+  renderOverlay();
+});
+['pointerup', 'pointercancel'].forEach(ev => $('ovl').addEventListener(ev, () => { ovDrag = null; }));
+
+// Arrastrar un archivo sobre la vista, o pegar con Ctrl+V
+const box = $('canvasBox');
+box.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files') && !resultId) { e.preventDefault(); e.stopPropagation(); box.classList.add('drop-img'); } });
+box.addEventListener('dragleave', () => box.classList.remove('drop-img'));
+box.addEventListener('drop', (e) => {
+  e.preventDefault(); e.stopPropagation(); box.classList.remove('drop-img');
+  if (!resultId) insertImage(e.dataTransfer.files[0]);
+});
+document.addEventListener('paste', (e) => {
+  if (!$('modal').classList.contains('open') || resultId || e.target.tagName === 'TEXTAREA') return;
+  const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+  if (item) { e.preventDefault(); insertImage(item.getAsFile()); }
+});
+
 function setResult(r) {
   resultId = r ? r.id : null;
   $('side').classList.toggle('has-result', !!r);
   $('canvasBox').classList.toggle('showing-result', !!r);
   if (r) { $('resultImg').src = r.image; $('resultInfo').textContent = `Listo en ${r.seconds} s. Revisa el resultado.`; }
+  $('retryBtn').hidden = !!r && mode === 'add' && !!ov && placeMode === 'paste';   // pegar siempre da lo mismo
+  $('discardBtn').textContent = mode === 'add' && ov ? 'Descartar y seguir colocando' : 'Descartar y seguir pintando';
 }
 
 async function generate() {
-  if (maskIsEmpty()) return sideMsg('Pinta primero la zona a editar.');
-  if (mode === 'add' && !$('prompt').value.trim()) return sideMsg('Describe qué quieres añadir.');
+  const withImg = mode === 'add' && !!ov, paste = withImg && placeMode === 'paste';
+  if (mode === 'add' && !withImg && !aiCanAddText()) {
+    const p0 = currentAi();
+    return sideMsg(p0 ? `${p0.label} no puede añadir a partir de texto. Inserta una imagen para pegarla, o elige otra IA.`
+                      : 'No hay ninguna IA configurada: inserta una imagen para pegarla, o configura una IA en Ajustes.');
+  }
+  if (!withImg && maskIsEmpty()) return sideMsg('Pinta primero la zona a editar.');
+  if (mode === 'add' && !withImg && !$('prompt').value.trim()) return sideMsg('Describe qué quieres añadir o inserta una imagen.');
   const edges = maskEdges();
   if (mode === 'remove' && edges.length && edgeAck !== edges.join() && !resultId) {
     // Primera pulsación: avisar. La segunda genera igualmente.
@@ -767,15 +908,19 @@ async function generate() {
     return;
   }
   const ai = currentAi();
-  if (!ai) return sideMsg('No hay ninguna IA configurada. Hazlo en Ajustes.');
-  let busyText = `${ai.label}: ${mode === 'remove' ? 'quitando' : 'añadiendo'}…`;
-  if (ai.id === 'local') {
+  if (!ai && !paste) return sideMsg('No hay ninguna IA configurada. Hazlo en Ajustes, o inserta una imagen y usa «Pegar tal cual».');
+  if (withImg && !paste && !ai.canIntegrate) return sideMsg(`${ai.label} no sabe integrar imágenes. Elige Gemini u OpenAI, o «Pegar tal cual».`);
+  let busyText = paste ? 'Pegando la imagen…'
+    : withImg ? `${ai.label}: integrando la imagen…` : `${ai.label}: ${mode === 'remove' ? 'quitando' : 'añadiendo'}…`;
+  if (!paste && ai.id === 'local') {
     const st = await api('/api/local/status').catch(() => null);
     if (st && !st.loaded) busyText = 'Preparando el modelo local y quitando… La primera vez tras abrir el editor puede tardar hasta un minuto.';
   }
   sideMsg(''); busy('aiBusy', true, busyText);
   try {
-    const r = await api('/api/edit', { ...crop, mode, provider: ai.id, prompt: $('prompt').value, mask: mask.toDataURL('image/png') });
+    const body = { ...crop, mode, provider: ai?.id, prompt: $('prompt').value, mask: mask.toDataURL('image/png') };
+    if (withImg) { body.overlay = { image: ov.src, x: ov.x, y: ov.y, w: ov.w, h: ov.w * ov.ar }; body.place = placeMode; }
+    const r = await api('/api/edit', body);
     setResult(r);
   } catch (e) { sideMsg(e.message); }
   finally { busy('aiBusy', false); }
